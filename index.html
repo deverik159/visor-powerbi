@@ -13,38 +13,42 @@
 
 <style>
   :root {
-    --fondo: #EEF1F4;       /* escenario claro alrededor del reporte */
-    --barra: #FFFFFF;       /* barra de navegación */
-    --texto: #1C2830;       /* texto principal */
-    --secundario: #5B6B76;  /* texto secundario */
-    --linea: #D5DCE1;       /* bordes y separadores */
-    --acento: #E8952A;      /* acento: segmento actual y botón principal */
+    --fondo: #EEF1F4;
+    --barra: #FFFFFF;
+    --texto: #1C2830;
+    --secundario: #5B6B76;
+    --linea: #D5DCE1;
+    --suave: #F6F8F9;
+    --acento: #E8952A;
+    --acento-claro: #F5C98A;
     --error: #C0392B;
     --fuente: "Archivo", "Segoe UI", system-ui, sans-serif;
   }
   * { box-sizing: border-box; margin: 0; }
   html, body { height: 100%; background: var(--fondo); color: var(--texto); font-family: var(--fuente); }
-  body { display: grid; grid-template-rows: 1fr auto; }
+  body { display: grid; grid-template-rows: 1fr auto; overflow: hidden; }
+  [hidden] { display: none !important; }
 
-  /* Escenario: el reporte va sobre una "hoja" blanca con sombra para separarlo del fondo */
+  /* Escenario */
   #escenario { position: relative; padding: 16px 16px 12px; min-height: 0; }
   #reporte {
-    width: 100%; height: 100%; border-radius: 6px; overflow: hidden;
+    position: relative; width: 100%; height: 100%; border-radius: 6px; overflow: hidden;
     background: #FFFFFF; box-shadow: 0 1px 3px rgba(28, 40, 48, 0.12), 0 6px 20px rgba(28, 40, 48, 0.08);
   }
   #reporte iframe { border: 0; }
+  .marco { position: absolute; inset: 0; visibility: hidden; }
+  .marco.activo { visibility: visible; }
 
-  /* Pantalla de acceso / estados */
   #estado {
     position: absolute; inset: 0; display: grid; place-content: center; gap: 20px;
-    text-align: center; padding: 24px; background: var(--fondo);
+    text-align: center; padding: 24px; background: var(--fondo); z-index: 5;
   }
   #estado h1 { font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 800; font-stretch: 75%; line-height: 1; letter-spacing: -0.01em; }
-  #estado p { color: var(--secundario); max-width: 46ch; margin-inline: auto; line-height: 1.5; }
+  #estado p { color: var(--secundario); max-width: 50ch; margin-inline: auto; line-height: 1.5; }
   #estado.error p { color: var(--error); }
-  [hidden] { display: none !important; }
+  #estado .acciones { display: flex; gap: 8px; justify-content: center; }
 
-  /* Barra de navegación */
+  /* Barra inferior */
   #barra {
     display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 24px; align-items: center;
     padding: 12px 16px 14px; background: var(--barra); border-top: 1px solid var(--linea);
@@ -57,9 +61,9 @@
     background: #DDE3E8; transition: background 0.2s;
   }
   #laminas button:hover { background: #C3CCD3; }
-  #laminas button.vista { background: #F5C98A; }
-  #laminas button.actual { background: var(--acento); }
-  .controles { display: flex; gap: 8px; }
+  #laminas button.vista { background: var(--acento-claro); }
+  #laminas button.actual { background: linear-gradient(90deg, var(--acento) calc(var(--avance, 1) * 100%), var(--acento-claro) 0); }
+  .controles { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 
   button.boton {
     font: inherit; font-weight: 600; font-size: 0.9375rem; cursor: pointer;
@@ -68,33 +72,85 @@
   }
   button.boton:hover { border-color: var(--secundario); }
   button.primario { background: var(--acento); color: #FFFFFF; border-color: var(--acento); }
-  button.primario:hover { filter: brightness(0.95); }
-  button:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+  button.primario:hover { filter: brightness(0.95); border-color: var(--acento); }
+  button.chico { padding: 4px 8px; font-size: 0.8125rem; }
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
   button:disabled { opacity: 0.4; cursor: default; }
+  #btnReproducir { min-width: 7.5rem; }
 
-  /* Notas del presentador */
   #notas {
-    position: absolute; right: 28px; bottom: 24px; width: min(380px, calc(100% - 56px));
+    position: absolute; right: 28px; bottom: 24px; width: min(380px, calc(100% - 56px)); z-index: 4;
     background: #FFFFFF; border: 1px solid var(--linea); border-left: 3px solid var(--acento); border-radius: 4px;
     padding: 14px 16px; line-height: 1.5; font-size: 0.9375rem; box-shadow: 0 8px 24px rgba(28, 40, 48, 0.15);
   }
 
-  @media (max-width: 640px) {
+  /* Pantalla completa: sin botones, el reporte ocupa todo */
+  body.pantalla-completa #barra { display: none; }
+  body.pantalla-completa #escenario { padding: 0; }
+  body.pantalla-completa #reporte { border-radius: 0; box-shadow: none; }
+  #lineaProgreso {
+    position: fixed; left: 0; bottom: 0; height: 4px; width: 0; background: var(--acento); z-index: 30;
+    display: none; pointer-events: none;
+  }
+  body.pantalla-completa.con-linea #lineaProgreso { display: block; }
+
+  /* Panel de configuración */
+  #panel {
+    position: fixed; top: 0; right: 0; height: 100%; width: min(480px, 100vw); z-index: 20;
+    background: #FFFFFF; border-left: 1px solid var(--linea); box-shadow: -12px 0 32px rgba(28, 40, 48, 0.12);
+    display: grid; grid-template-rows: auto 1fr auto;
+  }
+  #panel header, #panel footer { padding: 16px 20px; display: flex; align-items: center; gap: 8px; }
+  #panel header { border-bottom: 1px solid var(--linea); justify-content: space-between; }
+  #panel header h2 { font-size: 1.375rem; font-weight: 800; font-stretch: 80%; }
+  #panel footer { border-top: 1px solid var(--linea); flex-wrap: wrap; }
+  #panel footer .espacio { flex: 1; }
+  #cuerpoPanel { overflow-y: auto; padding: 4px 20px 24px; }
+  #panel section { padding: 18px 0; border-bottom: 1px solid var(--linea); }
+  #panel section:last-child { border-bottom: 0; }
+  #panel h3 { font-size: 1rem; font-weight: 700; margin-bottom: 12px; }
+  #panel .ayuda { color: var(--secundario); font-size: 0.8125rem; line-height: 1.45; margin-top: 4px; }
+  #estadoGuardado { font-size: 0.8125rem; color: var(--secundario); }
+  #estadoGuardado.pendiente { color: var(--acento); font-weight: 600; }
+
+  .campo { display: grid; gap: 4px; font-size: 0.875rem; font-weight: 600; }
+  .rejilla { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .rejilla .ancho { grid-column: 1 / -1; }
+  .interruptor { display: flex; align-items: center; gap: 8px; font-size: 0.875rem; cursor: pointer; }
+  .interruptor input { width: 16px; height: 16px; }
+  #panel input[type=checkbox] { accent-color: var(--acento); }
+  #panel input[type=text], #panel input[type=url], #panel input[type=number], #panel select, #panel textarea {
+    font: inherit; font-weight: 400; font-size: 0.875rem; color: var(--texto); width: 100%;
+    border: 1px solid var(--linea); border-radius: 4px; padding: 7px 9px; background: #FFFFFF;
+  }
+  #panel textarea { resize: vertical; min-height: 56px; }
+
+  .encabezado-lista {
+    display: grid; grid-template-columns: auto 1.6rem minmax(0, 1fr) 4.5rem; gap: 8px;
+    padding: 0 11px 6px; font-size: 0.75rem; color: var(--secundario); font-weight: 600;
+  }
+  .diapo { border: 1px solid var(--linea); border-radius: 6px; padding: 10px; margin-bottom: 8px; background: #FFFFFF; }
+  .diapo.inactiva { background: var(--suave); }
+  .diapo.inactiva .principal { opacity: 0.55; }
+  .diapo.en-curso { border-color: var(--acento); box-shadow: inset 3px 0 0 var(--acento); }
+  .diapo .principal { display: grid; grid-template-columns: auto 1.6rem minmax(0, 1fr) 4.5rem; gap: 8px; align-items: center; }
+  .diapo .num { font-size: 0.8125rem; color: var(--secundario); font-variant-numeric: tabular-nums; text-align: right; }
+  .diapo .origen { font-size: 0.75rem; color: var(--secundario); margin: 6px 0 0 calc(16px + 1.6rem + 16px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .diapo .origen.falla { color: var(--error); }
+  .diapo .acciones { display: flex; gap: 4px; margin-top: 8px; flex-wrap: wrap; }
+  .diapo details { margin-top: 8px; }
+  .diapo summary { font-size: 0.8125rem; color: var(--secundario); cursor: pointer; }
+  .diapo details .rejilla { margin-top: 8px; }
+  .vacio { color: var(--secundario); font-size: 0.875rem; padding: 12px; border: 1px dashed var(--linea); border-radius: 6px; text-align: center; }
+
+  #agregarEstado { font-size: 0.8125rem; margin-top: 8px; color: var(--secundario); }
+  #agregarEstado.falla { color: var(--error); }
+
+  @media (max-width: 720px) {
     #barra { grid-template-columns: 1fr; }
-    .controles { justify-content: space-between; }
+    .controles { justify-content: flex-start; }
   }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
-
-  /* Varios reportes apilados: solo el activo es visible */
-  #reporte { position: relative; }
-  .marco { position: absolute; inset: 0; visibility: hidden; }
-  .marco.activo { visibility: visible; }
-
-  /* El segmento actual se llena conforme corre el tiempo de la diapositiva */
-  #laminas button.actual {
-    background: linear-gradient(90deg, var(--acento) calc(var(--avance, 1) * 100%), #F5C98A 0);
-  }
-  #btnReproducir { min-width: 7.5rem; }
 </style>
 </head>
 <body>
@@ -104,7 +160,10 @@
   <div id="estado">
     <h1 id="tituloPresentacion">Presentación de datos</h1>
     <p id="mensaje">Inicia sesión con tu cuenta de Microsoft para cargar los reportes.</p>
-    <div><button class="boton primario" id="btnEntrar">Iniciar sesión</button></div>
+    <div class="acciones">
+      <button class="boton primario" id="btnEntrar">Iniciar sesión</button>
+      <button class="boton" id="btnConfigurarVacio" hidden>Abrir configuración</button>
+    </div>
   </div>
   <aside id="notas" hidden></aside>
 </main>
@@ -112,6 +171,7 @@
 <nav id="barra" aria-label="Navegación de la presentación" hidden>
   <h2 id="titulo">—<span id="contador"></span></h2>
   <div class="controles">
+    <button class="boton" id="btnConfigurar">Configurar</button>
     <button class="boton" id="btnReproducir" aria-pressed="true">Pausar</button>
     <button class="boton" id="btnNotas" aria-pressed="false">Notas</button>
     <button class="boton" id="btnPantalla">Pantalla completa</button>
@@ -121,47 +181,111 @@
   <div id="laminas" role="tablist"></div>
 </nav>
 
+<div id="lineaProgreso"></div>
+
+<aside id="panel" aria-label="Configuración de la presentación" hidden>
+  <header>
+    <h2>Configuración</h2>
+    <button class="boton chico" id="btnCerrarPanel">Cerrar</button>
+  </header>
+
+  <div id="cuerpoPanel">
+    <section>
+      <h3>Agregar reporte</h3>
+      <label class="campo">URL del reporte o de una página
+        <input type="url" id="urlNueva" placeholder="https://app.powerbi.com/groups/…/reports/…">
+      </label>
+      <label class="interruptor" style="margin-top:10px">
+        <input type="checkbox" id="agregarTodas" checked>
+        Agregar todas las páginas del reporte
+      </label>
+      <p class="ayuda">Si la URL incluye una página y desmarcas esta opción, solo se agrega esa página.</p>
+      <div style="margin-top:10px"><button class="boton primario chico" id="btnAgregar">Agregar</button></div>
+      <p id="agregarEstado" aria-live="polite"></p>
+    </section>
+
+    <section>
+      <h3>Diapositivas</h3>
+      <div class="encabezado-lista" aria-hidden="true"><span>Incluir</span><span></span><span>Título</span><span>Segundos</span></div>
+      <div id="listaDiapos"></div>
+    </section>
+
+    <section>
+      <h3>Presentación</h3>
+      <div class="rejilla">
+        <label class="campo ancho">Nombre
+          <input type="text" id="cfgTitulo">
+        </label>
+        <label class="campo">Segundos por diapositiva
+          <input type="number" id="cfgDuracion" min="0" step="1">
+        </label>
+        <label class="campo">Ajuste de pantalla
+          <select id="cfgAjuste">
+            <option value="pagina">Página completa</option>
+            <option value="ancho">Llenar el ancho</option>
+            <option value="real">Tamaño original</option>
+          </select>
+        </label>
+        <label class="campo">Actualizar datos cada (min)
+          <input type="number" id="cfgActualizar" min="0" step="1">
+        </label>
+        <label class="campo">Recargar reportes cada (min)
+          <input type="number" id="cfgRecargar" min="0" step="1">
+        </label>
+      </div>
+      <p class="ayuda">0 = desactivado. "Actualizar datos" consulta de nuevo el modelo; "Recargar" vuelve a abrir el reporte completo, útil si publican una versión nueva.</p>
+      <div style="display:grid; gap:8px; margin-top:12px">
+        <label class="interruptor"><input type="checkbox" id="cfgAutoplay"> Iniciar reproduciendo</label>
+        <label class="interruptor"><input type="checkbox" id="cfgCiclo"> Repetir en ciclo al terminar</label>
+        <label class="interruptor"><input type="checkbox" id="cfgPausar"> Pausar si hago clic en un visual</label>
+        <label class="interruptor"><input type="checkbox" id="cfgLinea"> Línea de progreso en pantalla completa</label>
+      </div>
+    </section>
+
+    <section>
+      <h3>Respaldo</h3>
+      <p class="ayuda" style="margin:0 0 10px">La configuración se guarda en este navegador. Para llevarla a otra computadora o pantalla, expórtala e impórtala allá.</p>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <button class="boton chico" id="btnExportar">Exportar</button>
+        <button class="boton chico" id="btnImportar">Importar</button>
+        <button class="boton chico" id="btnRestablecer">Restablecer</button>
+        <input type="file" id="archivoImportar" accept="application/json,.json" hidden>
+      </div>
+    </section>
+  </div>
+
+  <footer>
+    <span id="estadoGuardado">Sin cambios</span>
+    <span class="espacio"></span>
+    <button class="boton chico" id="btnDescartar">Descartar cambios</button>
+    <button class="boton primario chico" id="btnGuardar">Guardar</button>
+  </footer>
+</aside>
+
 <script>
 /* =====================================================================
-   1) CONFIGURACIÓN — lo único que necesitas editar
+   1) CONFIGURACIÓN INICIAL
+   Se usa solo la primera vez (o al pulsar "Restablecer"). Después, todo se
+   edita desde el botón "Configurar" y se guarda en el navegador.
    ===================================================================== */
 const CONFIG = {
   clientId: "244983b7-dc4b-4a77-b6d6-5d0d1caae14f",   // Id. de aplicación (Entra ID)
   tenantId: "4d97989b-1a29-4b15-a65d-e1c8b49df8cf",   // Id. de directorio (Entra ID)
 
-  // Opciones generales de la presentación
   presentacion: {
-    titulo: "Presentación de datos",  // aparece en la pestaña del navegador y al iniciar
-    autoplay: true,                   // true = avanza sola al abrir; false = empieza en pausa
-    duracion: 30,                     // segundos por diapositiva (si la diapositiva no define otra)
-    ciclo: true,                      // true = al terminar vuelve a la primera y sigue
-    pausarAlInteractuar: true,        // true = si haces clic en un visual, se pausa el avance
-    ajuste: "pagina",                 // "pagina" (completa), "ancho" (llena el ancho) o "real" (tamaño original)
+    titulo: "Presentación de datos",
+    autoplay: true,
+    duracion: 30,
+    ciclo: true,
+    pausarAlInteractuar: true,
+    ajuste: "pagina",
+    actualizarDatosMin: 0,
+    recargarMin: 0,
+    lineaEnPantallaCompleta: true,
   },
 
-  /* Diapositivas, en el orden en que se muestran.
-     Para cada una, abre la página en app.powerbi.com y copia la URL completa de la barra de direcciones.
-     Opciones por diapositiva (todas opcionales excepto url):
-       titulo          → texto de la barra inferior (si no lo pones, usa el nombre de la página)
-       duracion        → segundos que dura esta diapositiva; 0 = no avanza sola
-       notas           → notas del presentador (tecla N)
-       marcador        → nombre interno de un marcador del reporte (ver consola F12)
-       ajuste          → "pagina", "ancho" o "real" solo para esta diapositiva
-       todasLasPaginas → true = convierte cada página visible del reporte en una diapositiva */
   diapositivas: [
-    {
-      url: "https://app.powerbi.com/groups/me/reports/5b49e5bf-81b8-4945-a353-abb2400bc9ad",
-      todasLasPaginas: true,
-      duracion: 20,
-    },
-
-    // Ejemplos (quita las // para usarlos):
-    // { url: "https://app.powerbi.com/groups/me/reports/5b49e5bf-81b8-4945-a353-abb2400bc9ad/45ece729167e8167e3db",
-    //   titulo: "Tendencia de reciclajes", duracion: 45, notas: "Comentar la caída de junio." },
-    // { url: "https://app.powerbi.com/groups/OTRO-WORKSPACE/reports/OTRO-REPORTE/PAGINA",
-    //   titulo: "Ocupación Vía Verde", ajuste: "ancho" },
-    // { url: "https://app.powerbi.com/groups/me/reports/5b49e5bf-81b8-4945-a353-abb2400bc9ad",
-    //   marcador: "Bookmark1a2b3c4d", titulo: "Solo máquinas de Querétaro", duracion: 15 },
+    { url: "https://app.powerbi.com/groups/me/reports/5b49e5bf-81b8-4945-a353-abb2400bc9ad", todasLasPaginas: true, duracion: 20 },
   ],
 };
 
@@ -175,7 +299,7 @@ function errorEnPantalla(texto) {
   document.getElementById("mensaje").textContent = texto;
 }
 window.addEventListener("error", (e) => { if (!AVISOS.test(e.message)) errorEnPantalla(`Error: ${e.message}`); });
-window.addEventListener("unhandledrejection", (e) => errorEnPantalla(`Error: ${e.reason?.message || e.reason}`));
+window.addEventListener("unhandledrejection", (e) => console.error("Promesa rechazada:", e.reason));
 
 if (location.protocol === "file:") {
   errorEnPantalla("Abriste el archivo con doble clic desde tu computadora. El visor solo funciona desde su dirección de GitHub Pages.");
@@ -222,46 +346,97 @@ async function obtenerToken() {
 }
 
 /* =====================================================================
-   3) Carga de reportes (uno por cada reporte distinto en las diapositivas)
+   3) Estado de la configuración (guardado en el navegador)
    ===================================================================== */
 const $ = (id) => document.getElementById(id);
 const models = window["powerbi-client"].models;
+const CLAVE = "visorPowerBI.configuracion.v1";
 const AJUSTES = {
   pagina: models.DisplayOption.FitToPage,
   ancho:  models.DisplayOption.FitToWidth,
   real:   models.DisplayOption.ActualSize,
 };
-const P = Object.assign(
-  { titulo: "Presentación de datos", autoplay: true, duracion: 30, ciclo: true, pausarAlInteractuar: true, ajuste: "pagina" },
-  CONFIG.presentacion
-);
+const PRESENTACION_BASE = {
+  titulo: "Presentación de datos", autoplay: true, duracion: 30, ciclo: true, pausarAlInteractuar: true,
+  ajuste: "pagina", actualizarDatosMin: 0, recargarMin: 0, lineaEnPantallaCompleta: true,
+};
 
-const reportes = new Map();   // reportId → promesa del reporte cargado
-const cargados = new Map();   // reportId → reporte ya cargado
-let diapositivas = [], actual = 0, reproduciendo = P.autoplay, transcurrido = 0, ultimoTick = 0;
-const vistas = new Set();
+const nuevoId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const copia = (x) => JSON.parse(JSON.stringify(x));
+
+function normalizar(cfg) {
+  return {
+    presentacion: Object.assign({}, PRESENTACION_BASE, cfg?.presentacion),
+    diapositivas: (cfg?.diapositivas || []).map(d => Object.assign({ id: nuevoId(), activa: true }, d)),
+  };
+}
+
+function leerGuardado() {
+  try {
+    const t = localStorage.getItem(CLAVE);
+    return t ? normalizar(JSON.parse(t)) : null;
+  } catch { return null; }
+}
+
+let estado = leerGuardado() || normalizar(CONFIG);   // lo que se está usando (incluye cambios sin guardar)
+let guardado = copia(estado);                        // última versión guardada
+let hayCambios = false;
+
+function marcarCambios() {
+  hayCambios = JSON.stringify(estado) !== JSON.stringify(guardado);
+  $("estadoGuardado").textContent = hayCambios ? "Cambios sin guardar" : "Guardado";
+  $("estadoGuardado").classList.toggle("pendiente", hayCambios);
+}
+
+function guardar() {
+  try {
+    localStorage.setItem(CLAVE, JSON.stringify(estado));
+    guardado = copia(estado);
+    marcarCambios();
+  } catch (e) {
+    $("estadoGuardado").textContent = `No se pudo guardar: ${e.message}`;
+  }
+}
+
+/* =====================================================================
+   4) Carga de reportes
+   ===================================================================== */
+const reportes = new Map();   // reportId → promesa
+const cargados = new Map();   // reportId → reporte listo
+const fallas   = new Map();   // reportId → mensaje de error
 
 function parsearUrl(url) {
   if (/\/apps\//i.test(url)) {
-    throw new Error(`Esta URL es de una App de Power BI y no es compatible. Abre el reporte desde su área de trabajo y copia esa URL: ${url}`);
+    throw new Error("Esa URL es de una App de Power BI. Abre el reporte desde su área de trabajo y copia esa URL.");
   }
   const m = String(url).match(/groups\/([^/?#]+)\/reports\/([0-9a-f-]{36})(?:\/([^/?#]+))?/i);
-  if (!m) throw new Error(`No reconozco esta URL de Power BI: ${url}`);
-  return { workspace: m[1], reportId: m[2], pagina: m[3] };
+  if (!m) throw new Error("No reconozco esa URL. Debe verse como https://app.powerbi.com/groups/…/reports/…");
+  return {
+    workspace: m[1],
+    reportId: m[2].toLowerCase(),
+    pagina: m[3],
+    urlBase: `https://app.powerbi.com/groups/${m[1]}/reports/${m[2].toLowerCase()}`,
+  };
 }
 
-function obtenerReporte(workspace, reportId, token) {
-  if (!reportes.has(reportId)) reportes.set(reportId, crearReporte(workspace, reportId, token));
-  return reportes.get(reportId);
+async function obtenerReporte(url) {
+  const u = parsearUrl(url);
+  if (!reportes.has(u.reportId)) {
+    const promesa = crearReporte(u).catch(e => { fallas.set(u.reportId, e.message); reportes.delete(u.reportId); throw e; });
+    reportes.set(u.reportId, promesa);
+  }
+  return reportes.get(u.reportId);
 }
 
-async function crearReporte(workspace, reportId, token) {
+async function crearReporte({ workspace, reportId }) {
+  const token = await obtenerToken();
+  if (!token) throw new Error("No hay sesión activa.");
   const api = workspace === "me"
     ? "https://api.powerbi.com/v1.0/myorg"
     : `https://api.powerbi.com/v1.0/myorg/groups/${workspace}`;
   const resp = await fetch(`${api}/reports/${reportId}`, { headers: { Authorization: `Bearer ${token}` } });
   if (!resp.ok) {
-    throw new Error(`No se pudo abrir el reporte ${reportId} (error ${resp.status}). Revisa que la URL sea correcta y que tu cuenta tenga acceso a ese espacio de trabajo.`);
+    throw new Error(`No se pudo abrir el reporte (error ${resp.status}). Revisa la URL y que tu cuenta tenga acceso a ese espacio de trabajo.`);
   }
   const info = await resp.json();
 
@@ -269,7 +444,7 @@ async function crearReporte(workspace, reportId, token) {
   contenedor.className = "marco";
   $("reporte").appendChild(contenedor);
 
-  const ajusteInicial = AJUSTES[P.ajuste] ?? AJUSTES.pagina;
+  const ajusteInicial = AJUSTES[estado.presentacion.ajuste] ?? AJUSTES.pagina;
   const reporte = powerbi.embed(contenedor, {
     type: "report",
     id: reportId,
@@ -284,88 +459,144 @@ async function crearReporte(workspace, reportId, token) {
     },
   });
 
-  const entrada = { reportId, nombre: info.name, contenedor, reporte, paginas: [], ajusteActual: ajusteInicial };
+  const entrada = { reportId, nombre: info.name, contenedor, reporte, paginas: [], marcadores: [], ajusteActual: ajusteInicial, listo: false };
 
   await new Promise((listo, falla) => {
-    let yaCargo = false;
     reporte.on("loaded", async () => {
-      yaCargo = true;
       entrada.paginas = await reporte.getPages();
-      const marcadores = await reporte.bookmarksManager.getBookmarks();
-      // Útil para configurar: en la consola (F12) aparecen los nombres de páginas y marcadores
-      console.log(`Reporte: ${info.name}`);
-      console.table(entrada.paginas.map(p => ({ pagina: p.displayName, nombreInterno: p.name })));
-      if (marcadores.length) console.table(marcadores.map(m => ({ marcador: m.displayName, nombreInterno: m.name })));
+      entrada.marcadores = await reporte.bookmarksManager.getBookmarks();
+      entrada.ajusteActual = ajusteInicial;
+      if (entrada.listo) {
+        // Se recargó el reporte: volver a mostrar la diapositiva en curso
+        if (diapositivas[actual]?.reportId === reportId) irA(actual, { reiniciarTiempo: false });
+        return;
+      }
+      entrada.listo = true;
       listo();
     });
     reporte.on("error", (e) => {
       console.error(`Power BI (${info.name}):`, e.detail);
-      if (!yaCargo) falla(new Error(`Power BI no pudo cargar "${info.name}": ${e.detail?.message || "error desconocido"}`));
+      if (!entrada.listo) falla(new Error(`Power BI no pudo cargar "${info.name}": ${e.detail?.message || "error desconocido"}`));
     });
   });
 
-  if (P.pausarAlInteractuar) {
-    const pausarPorClic = () => { if (reproduciendo) alternarReproduccion(false); };
-    ["visualClicked", "dataSelected", "buttonClicked"].forEach(ev => reporte.on(ev, pausarPorClic));
-  }
+  const pausarPorClic = () => { if (estado.presentacion.pausarAlInteractuar && reproduciendo) alternarReproduccion(false); };
+  ["visualClicked", "dataSelected", "buttonClicked"].forEach(ev => reporte.on(ev, pausarPorClic));
 
+  fallas.delete(reportId);
   cargados.set(reportId, entrada);
   return entrada;
 }
 
-async function armarDiapositivas(token) {
-  if (!CONFIG.diapositivas?.length) throw new Error("Agrega al menos una diapositiva en CONFIG.diapositivas.");
-  const urls = CONFIG.diapositivas.map(d => parsearUrl(d.url));
+function paginasVisibles(r) {
+  return r.paginas.filter(p => p.visibility === 0);
+}
 
-  // Todos los reportes se cargan en paralelo para que el cambio entre ellos sea inmediato
-  const entradas = await Promise.all(urls.map(u => obtenerReporte(u.workspace, u.reportId, token)));
-
+// Convierte una diapositiva con "todasLasPaginas" en una diapositiva por página
+function expandirDiapositivas() {
+  let cambio = false;
   const lista = [];
-  CONFIG.diapositivas.forEach((d, i) => {
-    const r = entradas[i];
-    if (d.todasLasPaginas) {
-      r.paginas.filter(p => p.visibility === 0).forEach(p =>
-        lista.push({ ...d, reportId: r.reportId, pagina: p.name, titulo: p.displayName }));
-      return;
+  for (const d of estado.diapositivas) {
+    const r = cargados.get(safeReportId(d.url));
+    if (d.todasLasPaginas && r) {
+      const { todasLasPaginas, ...resto } = d;
+      paginasVisibles(r).forEach(p => lista.push({ ...resto, id: nuevoId(), pagina: p.name }));
+      cambio = true;
+    } else {
+      if (!d.pagina && !d.marcador && r) {
+        const desdeUrl = parsearUrl(d.url).pagina;
+        const p = desdeUrl && r.paginas.find(x => x.name === desdeUrl);
+        d.pagina = p ? p.name : paginasVisibles(r)[0]?.name;
+        d.url = parsearUrl(d.url).urlBase;
+        cambio = cambio || !!d.pagina;
+      }
+      lista.push(d);
     }
-    const buscada = d.pagina || urls[i].pagina;
-    const pag = buscada ? r.paginas.find(p => p.name === buscada || p.displayName === buscada) : null;
-    if (buscada && !pag) console.warn(`No existe la página "${buscada}" en "${r.nombre}"; se mostrará la página inicial.`);
-    lista.push({ ...d, reportId: r.reportId, pagina: pag?.name, titulo: d.titulo || pag?.displayName || r.nombre });
-  });
-  return lista;
+  }
+  if (cambio) estado.diapositivas = lista;
+  return cambio;
+}
+
+function safeReportId(url) {
+  try { return parsearUrl(url).reportId; } catch { return null; }
 }
 
 /* =====================================================================
-   4) Navegación, temporizador y ciclo
+   5) Diapositivas en reproducción
    ===================================================================== */
+let diapositivas = [], actual = 0, reproduciendo = true, transcurrido = 0, ultimoTick = 0;
+const vistas = new Set();
+
+function nombreContenido(d) {
+  const r = cargados.get(safeReportId(d.url));
+  if (!r) return "";
+  if (d.marcador) return r.marcadores.find(m => m.name === d.marcador)?.displayName || d.marcador;
+  return r.paginas.find(p => p.name === d.pagina)?.displayName || r.nombre;
+}
+const tituloDe = (d) => d.titulo?.trim() || nombreContenido(d) || "Diapositiva";
+const duracionDe = (d) => (d.duracion === "" || d.duracion == null ? estado.presentacion.duracion : Number(d.duracion)) * 1000;
+
+// Reconstruye la lista en reproducción a partir del estado, sin perder la diapositiva actual
+function aplicarEstado() {
+  const idActual = diapositivas[actual]?.id;
+  diapositivas = estado.diapositivas
+    .filter(d => d.activa && cargados.has(safeReportId(d.url)))
+    .map(d => ({ ...d, reportId: safeReportId(d.url) }));
+
+  document.title = estado.presentacion.titulo;
+  $("tituloPresentacion").textContent = estado.presentacion.titulo;
+  document.body.classList.toggle("con-linea", !!estado.presentacion.lineaEnPantallaCompleta);
+
+  if (!diapositivas.length) {
+    for (const x of cargados.values()) x.contenedor.classList.remove("activo");
+    $("barra").hidden = true;
+    $("estado").hidden = false;
+    $("estado").classList.remove("error");
+    $("mensaje").textContent = "No hay diapositivas activas. Abre la configuración para agregar un reporte.";
+    $("btnEntrar").hidden = true;
+    $("btnConfigurarVacio").hidden = false;
+    return;
+  }
+
+  $("estado").hidden = true;
+  $("barra").hidden = document.body.classList.contains("pantalla-completa");
+  construirLaminas();
+  const nuevo = diapositivas.findIndex(d => d.id === idActual);
+  if (nuevo >= 0) { actual = nuevo; mostrar(actual); }
+  else irA(Math.min(actual, diapositivas.length - 1));
+}
+
 function construirLaminas() {
   $("laminas").innerHTML = "";
   diapositivas.forEach((d, i) => {
     const b = document.createElement("button");
     b.setAttribute("role", "tab");
-    b.setAttribute("aria-label", `Ir a ${d.titulo}`);
-    b.title = d.titulo;
+    b.setAttribute("aria-label", `Ir a ${tituloDe(d)}`);
+    b.title = tituloDe(d);
     b.onclick = () => irA(i);
     $("laminas").appendChild(b);
   });
 }
 
-async function irA(i) {
+async function irA(i, { reiniciarTiempo = true } = {}) {
   if (!diapositivas.length) return;
   const total = diapositivas.length;
   if (i >= total) {
-    if (!P.ciclo) { alternarReproduccion(false); return; }
+    if (!estado.presentacion.ciclo) { alternarReproduccion(false); return; }
     i = 0;
   }
-  if (i < 0) i = P.ciclo ? total - 1 : 0;
+  if (i < 0) i = estado.presentacion.ciclo ? total - 1 : 0;
 
   actual = i;
-  transcurrido = 0;
+  if (reiniciarTiempo) transcurrido = 0;
   vistas.add(i);
+  await mostrar(i);
+}
+
+async function mostrar(i) {
   const d = diapositivas[i];
   const r = cargados.get(d.reportId);
-
+  if (!r) return;
   try {
     if (d.marcador) {
       await r.reporte.bookmarksManager.apply(d.marcador);
@@ -373,26 +604,26 @@ async function irA(i) {
       const p = r.paginas.find(x => x.name === d.pagina);
       if (p) await p.setActive();
     }
-    const ajuste = AJUSTES[d.ajuste || P.ajuste] ?? AJUSTES.pagina;
+    const ajuste = AJUSTES[d.ajuste || estado.presentacion.ajuste] ?? AJUSTES.pagina;
     if (ajuste !== r.ajusteActual) {
       await r.reporte.updateSettings({ layoutType: models.LayoutType.Custom, customLayout: { displayOption: ajuste } });
       r.ajusteActual = ajuste;
     }
   } catch (e) { console.error(e); }
 
-  // Si mientras cargaba se cambió de diapositiva, no mostrar esta
-  if (actual !== i) return;
+  if (actual !== i) return;   // se cambió de diapositiva mientras cargaba
   for (const x of cargados.values()) x.contenedor.classList.toggle("activo", x === r);
   actualizarBarra();
 }
 
 function actualizarBarra() {
   const d = diapositivas[actual];
+  if (!d) return;
   const total = diapositivas.length;
-  $("titulo").firstChild.textContent = d.titulo;
+  $("titulo").firstChild.textContent = tituloDe(d);
   $("contador").textContent = `${actual + 1} de ${total}`;
-  $("btnAnterior").disabled = !P.ciclo && actual === 0;
-  $("btnSiguiente").disabled = !P.ciclo && actual === total - 1;
+  $("btnAnterior").disabled = !estado.presentacion.ciclo && actual === 0;
+  $("btnSiguiente").disabled = !estado.presentacion.ciclo && actual === total - 1;
   [...$("laminas").children].forEach((b, j) => {
     b.classList.toggle("actual", j === actual);
     b.classList.toggle("vista", vistas.has(j) && j !== actual);
@@ -401,18 +632,17 @@ function actualizarBarra() {
   });
   $("notas").textContent = d.notas || "Esta diapositiva no tiene notas.";
   pintarAvance();
-}
-
-function duracionDe(d) {
-  return (d.duracion ?? P.duracion) * 1000;
+  if (!$("panel").hidden) resaltarEnPanel();
 }
 
 function pintarAvance() {
+  const d = diapositivas[actual];
   const b = $("laminas").children[actual];
-  if (!b) return;
-  const dur = duracionDe(diapositivas[actual]);
+  if (!d) return;
+  const dur = duracionDe(d);
   const avance = dur > 0 && reproduciendo ? Math.min(transcurrido / dur, 1) : 1;
-  b.style.setProperty("--avance", avance);
+  if (b) b.style.setProperty("--avance", avance);
+  $("lineaProgreso").style.width = `${(dur > 0 ? avance : 0) * 100}%`;
 }
 
 function tick(ahora) {
@@ -436,8 +666,299 @@ function alternarReproduccion(forzar) {
   pintarAvance();
 }
 
+/* Actualización de datos y recarga periódica */
+let ultimaActualizacion = Date.now(), ultimaRecarga = Date.now();
+setInterval(() => {
+  const { actualizarDatosMin, recargarMin } = estado.presentacion;
+  const ahora = Date.now();
+  if (recargarMin > 0 && ahora - ultimaRecarga >= recargarMin * 60000) {
+    ultimaRecarga = ahora; ultimaActualizacion = ahora;
+    for (const r of cargados.values()) r.reporte.reload().catch(e => console.warn("Recarga:", e));
+  } else if (actualizarDatosMin > 0 && ahora - ultimaActualizacion >= actualizarDatosMin * 60000) {
+    ultimaActualizacion = ahora;
+    for (const r of cargados.values()) r.reporte.refresh().catch(e => console.warn("Actualización:", e));
+  }
+}, 15000);
+
 /* =====================================================================
-   5) Controles
+   6) Panel de configuración
+   ===================================================================== */
+let reproduciaAntesDelPanel = true;
+
+function abrirPanel() {
+  if (!$("panel").hidden) return;
+  reproduciaAntesDelPanel = reproduciendo;
+  alternarReproduccion(false);
+  pintarPanel();
+  $("panel").hidden = false;
+  marcarCambios();
+}
+
+function cerrarPanel() {
+  $("panel").hidden = true;
+  if (reproduciaAntesDelPanel && diapositivas.length) alternarReproduccion(true);
+}
+
+// Cambios en tiempo real: cada edición se aplica de inmediato a la presentación
+let pendienteAplicar = null;
+function cambio({ repintar = false } = {}) {
+  marcarCambios();
+  clearTimeout(pendienteAplicar);
+  pendienteAplicar = setTimeout(aplicarEstado, 150);
+  if (repintar) pintarLista();
+}
+
+function pintarPanel() {
+  const p = estado.presentacion;
+  $("cfgTitulo").value = p.titulo;
+  $("cfgDuracion").value = p.duracion;
+  $("cfgAjuste").value = p.ajuste;
+  $("cfgActualizar").value = p.actualizarDatosMin;
+  $("cfgRecargar").value = p.recargarMin;
+  $("cfgAutoplay").checked = p.autoplay;
+  $("cfgCiclo").checked = p.ciclo;
+  $("cfgPausar").checked = p.pausarAlInteractuar;
+  $("cfgLinea").checked = p.lineaEnPantallaCompleta;
+  pintarLista();
+}
+
+function opcionesContenido(d) {
+  const r = cargados.get(safeReportId(d.url));
+  const sel = document.createElement("select");
+  if (!r) return sel;
+  const gP = document.createElement("optgroup"); gP.label = "Páginas";
+  r.paginas.forEach(p => gP.appendChild(new Option(p.visibility === 0 ? p.displayName : `${p.displayName} (oculta)`, `p:${p.name}`)));
+  sel.appendChild(gP);
+  if (r.marcadores.length) {
+    const gM = document.createElement("optgroup"); gM.label = "Marcadores";
+    r.marcadores.forEach(m => gM.appendChild(new Option(m.displayName, `m:${m.name}`)));
+    sel.appendChild(gM);
+  }
+  sel.value = d.marcador ? `m:${d.marcador}` : `p:${d.pagina}`;
+  return sel;
+}
+
+function pintarLista() {
+  const cont = $("listaDiapos");
+  cont.innerHTML = "";
+  if (!estado.diapositivas.length) {
+    cont.innerHTML = '<p class="vacio">Todavía no hay diapositivas. Pega la URL de un reporte arriba y pulsa Agregar.</p>';
+    return;
+  }
+  estado.diapositivas.forEach((d, i) => {
+    const rid = safeReportId(d.url);
+    const r = cargados.get(rid);
+    const el = document.createElement("div");
+    el.className = "diapo" + (d.activa ? "" : " inactiva");
+    el.dataset.id = d.id;
+
+    // Fila principal: activa, número, título, segundos
+    const principal = document.createElement("div");
+    principal.className = "principal";
+    const chk = document.createElement("input");
+    chk.type = "checkbox"; chk.checked = d.activa; chk.title = "Incluir en la presentación";
+    chk.setAttribute("aria-label", "Incluir en la presentación");
+    chk.onchange = () => { d.activa = chk.checked; el.classList.toggle("inactiva", !d.activa); cambio(); };
+    const num = document.createElement("span"); num.className = "num"; num.textContent = i + 1;
+    const tit = document.createElement("input");
+    tit.type = "text"; tit.value = d.titulo || ""; tit.placeholder = nombreContenido(d) || "Título";
+    tit.setAttribute("aria-label", "Título de la diapositiva");
+    tit.oninput = () => { d.titulo = tit.value; cambio(); };
+    const seg = document.createElement("input");
+    seg.type = "number"; seg.min = "0"; seg.step = "1";
+    seg.value = d.duracion ?? ""; seg.placeholder = estado.presentacion.duracion;
+    seg.title = "Segundos (vacío = predeterminado, 0 = no avanza sola)";
+    seg.setAttribute("aria-label", "Segundos");
+    seg.oninput = () => { d.duracion = seg.value === "" ? null : Number(seg.value); cambio(); };
+    principal.append(chk, num, tit, seg);
+    el.appendChild(principal);
+
+    // Origen
+    const origen = document.createElement("p");
+    origen.className = "origen";
+    if (r) origen.textContent = r.nombre;
+    else if (fallas.has(rid)) { origen.textContent = fallas.get(rid); origen.classList.add("falla"); }
+    else origen.textContent = "Cargando reporte…";
+    el.appendChild(origen);
+
+    // Más opciones
+    const det = document.createElement("details");
+    det.innerHTML = "<summary>Más opciones</summary>";
+    const rej = document.createElement("div"); rej.className = "rejilla";
+
+    const lblCont = document.createElement("label"); lblCont.className = "campo ancho"; lblCont.textContent = "Mostrar";
+    const selCont = opcionesContenido(d);
+    selCont.onchange = () => {
+      const [tipo, ...nombre] = selCont.value.split(":");
+      if (tipo === "m") { d.marcador = nombre.join(":"); delete d.pagina; }
+      else { d.pagina = nombre.join(":"); delete d.marcador; }
+      tit.placeholder = nombreContenido(d);
+      cambio();
+      const idx = diapositivas.findIndex(x => x.id === d.id);
+      if (idx >= 0) setTimeout(() => irA(idx), 200);
+    };
+    lblCont.appendChild(selCont);
+
+    const lblAj = document.createElement("label"); lblAj.className = "campo ancho"; lblAj.textContent = "Ajuste de pantalla";
+    const selAj = document.createElement("select");
+    [["", "Predeterminado de la presentación"], ["pagina", "Página completa"], ["ancho", "Llenar el ancho"], ["real", "Tamaño original"]]
+      .forEach(([v, t]) => selAj.appendChild(new Option(t, v)));
+    selAj.value = d.ajuste || "";
+    selAj.onchange = () => { if (selAj.value) d.ajuste = selAj.value; else delete d.ajuste; cambio(); };
+    lblAj.appendChild(selAj);
+
+    const lblNotas = document.createElement("label"); lblNotas.className = "campo ancho"; lblNotas.textContent = "Notas del presentador";
+    const txt = document.createElement("textarea"); txt.value = d.notas || "";
+    txt.oninput = () => { d.notas = txt.value; cambio(); };
+    lblNotas.appendChild(txt);
+
+    rej.append(lblCont, lblAj, lblNotas);
+    det.appendChild(rej);
+    el.appendChild(det);
+
+    // Acciones
+    const acc = document.createElement("div"); acc.className = "acciones";
+    const boton = (texto, fn, deshabilitado = false) => {
+      const b = document.createElement("button");
+      b.className = "boton chico"; b.textContent = texto; b.disabled = deshabilitado; b.onclick = fn;
+      return b;
+    };
+    acc.append(
+      boton("Ver", () => { const idx = diapositivas.findIndex(x => x.id === d.id); if (idx >= 0) irA(idx); }, !d.activa || !r),
+      boton("Subir", () => mover(i, -1), i === 0),
+      boton("Bajar", () => mover(i, 1), i === estado.diapositivas.length - 1),
+      boton("Duplicar", () => { estado.diapositivas.splice(i + 1, 0, { ...copia(d), id: nuevoId() }); cambio({ repintar: true }); }),
+      boton("Quitar", () => { estado.diapositivas.splice(i, 1); cambio({ repintar: true }); }),
+    );
+    el.appendChild(acc);
+    cont.appendChild(el);
+  });
+  resaltarEnPanel();
+}
+
+function resaltarEnPanel() {
+  const id = diapositivas[actual]?.id;
+  document.querySelectorAll("#listaDiapos .diapo").forEach(el => el.classList.toggle("en-curso", el.dataset.id === id));
+}
+
+function mover(i, delta) {
+  const j = i + delta;
+  if (j < 0 || j >= estado.diapositivas.length) return;
+  const [d] = estado.diapositivas.splice(i, 1);
+  estado.diapositivas.splice(j, 0, d);
+  cambio({ repintar: true });
+}
+
+async function agregarReporte() {
+  const url = $("urlNueva").value.trim();
+  const aviso = $("agregarEstado");
+  aviso.classList.remove("falla");
+  if (!url) { aviso.textContent = "Pega primero la URL del reporte."; aviso.classList.add("falla"); return; }
+  let u;
+  try { u = parsearUrl(url); } catch (e) { aviso.textContent = e.message; aviso.classList.add("falla"); return; }
+
+  $("btnAgregar").disabled = true;
+  aviso.textContent = "Cargando el reporte…";
+  try {
+    const r = await obtenerReporte(url);
+    const soloUna = u.pagina && !$("agregarTodas").checked;
+    const paginas = soloUna
+      ? r.paginas.filter(p => p.name === u.pagina)
+      : paginasVisibles(r);
+    if (!paginas.length) throw new Error(soloUna ? "No encontré esa página en el reporte." : "El reporte no tiene páginas visibles.");
+    paginas.forEach(p => estado.diapositivas.push({ id: nuevoId(), activa: true, url: u.urlBase, pagina: p.name }));
+    aviso.textContent = `Se agregaron ${paginas.length} diapositiva${paginas.length === 1 ? "" : "s"} de "${r.nombre}".`;
+    $("urlNueva").value = "";
+    cambio({ repintar: true });
+    $("btnConfigurarVacio").hidden = true;
+  } catch (e) {
+    aviso.textContent = e.message;
+    aviso.classList.add("falla");
+  } finally {
+    $("btnAgregar").disabled = false;
+  }
+}
+
+// Carga los reportes de la configuración actual (al iniciar, importar o descartar)
+async function cargarReportesDelEstado() {
+  const urls = [...new Set(estado.diapositivas.map(d => d.url))];
+  await Promise.allSettled(urls.map(u => obtenerReporte(u)));
+  expandirDiapositivas();
+}
+
+/* Campos generales */
+const general = [
+  ["cfgTitulo", "titulo", (el) => el.value],
+  ["cfgDuracion", "duracion", (el) => Math.max(0, Number(el.value) || 0)],
+  ["cfgAjuste", "ajuste", (el) => el.value],
+  ["cfgActualizar", "actualizarDatosMin", (el) => Math.max(0, Number(el.value) || 0)],
+  ["cfgRecargar", "recargarMin", (el) => Math.max(0, Number(el.value) || 0)],
+  ["cfgAutoplay", "autoplay", (el) => el.checked],
+  ["cfgCiclo", "ciclo", (el) => el.checked],
+  ["cfgPausar", "pausarAlInteractuar", (el) => el.checked],
+  ["cfgLinea", "lineaEnPantallaCompleta", (el) => el.checked],
+];
+general.forEach(([id, clave, leer]) => {
+  const el = $(id);
+  const evento = el.type === "checkbox" || el.tagName === "SELECT" ? "change" : "input";
+  el.addEventListener(evento, () => {
+    estado.presentacion[clave] = leer(el);
+    if (clave === "duracion") document.querySelectorAll('#listaDiapos input[type=number]').forEach(i => i.placeholder = estado.presentacion.duracion);
+    cambio();
+  });
+});
+
+$("btnAgregar").onclick = agregarReporte;
+$("urlNueva").addEventListener("keydown", (e) => { if (e.key === "Enter") agregarReporte(); });
+$("btnGuardar").onclick = guardar;
+$("btnDescartar").onclick = async () => {
+  estado = copia(guardado);
+  await cargarReportesDelEstado();
+  pintarPanel();
+  cambio();
+};
+$("btnRestablecer").onclick = async () => {
+  if (!confirm("Esto reemplaza la configuración actual por la configuración inicial del archivo. ¿Continuar?")) return;
+  estado = normalizar(CONFIG);
+  await cargarReportesDelEstado();
+  pintarPanel();
+  cambio();
+};
+$("btnExportar").onclick = () => {
+  const blob = new Blob([JSON.stringify(estado, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${(estado.presentacion.titulo || "presentacion").replace(/[^\w\-áéíóúñ ]/gi, "").trim().replace(/\s+/g, "-")}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+$("btnImportar").onclick = () => $("archivoImportar").click();
+$("archivoImportar").onchange = async (e) => {
+  const archivo = e.target.files[0];
+  e.target.value = "";
+  if (!archivo) return;
+  try {
+    const datos = JSON.parse(await archivo.text());
+    if (!Array.isArray(datos.diapositivas)) throw new Error("El archivo no tiene una lista de diapositivas.");
+    estado = normalizar(datos);
+    await cargarReportesDelEstado();
+    pintarPanel();
+    cambio();
+    $("estadoGuardado").textContent = "Importado: pulsa Guardar para conservarlo";
+  } catch (err) {
+    $("estadoGuardado").textContent = `No se pudo importar: ${err.message}`;
+  }
+};
+$("btnCerrarPanel").onclick = cerrarPanel;
+$("btnConfigurar").onclick = abrirPanel;
+$("btnConfigurarVacio").onclick = abrirPanel;
+
+window.addEventListener("beforeunload", (e) => {
+  if (hayCambios) { e.preventDefault(); e.returnValue = ""; }
+});
+
+/* =====================================================================
+   7) Controles de la presentación
    ===================================================================== */
 $("btnSiguiente").onclick = () => irA(actual + 1);
 $("btnAnterior").onclick  = () => irA(actual - 1);
@@ -449,8 +970,16 @@ $("btnNotas").onclick = () => {
 };
 $("btnPantalla").onclick = () => {
   if (document.fullscreenElement) document.exitFullscreen();
-  else document.documentElement.requestFullscreen();
+  else {
+    if (!$("panel").hidden) cerrarPanel();
+    document.documentElement.requestFullscreen();
+  }
 };
+document.addEventListener("fullscreenchange", () => {
+  const completa = !!document.fullscreenElement;
+  document.body.classList.toggle("pantalla-completa", completa);
+  $("barra").hidden = completa || !diapositivas.length;
+});
 $("btnEntrar").onclick = async () => {
   $("mensaje").textContent = "Redirigiendo al inicio de sesión de Microsoft…";
   try {
@@ -460,18 +989,21 @@ $("btnEntrar").onclick = async () => {
   }
 };
 
-// Teclado (funciona cuando el foco está fuera del reporte)
+// Teclado (funciona cuando el foco está fuera del reporte y del panel)
 document.addEventListener("keydown", (e) => {
+  if (e.target.closest?.("#panel, input, select, textarea")) return;
   if (e.target.closest?.("button") && (e.key === " " || e.key === "Enter")) return;
   if (e.key === "ArrowRight" || e.key === "PageDown") irA(actual + 1);
   if (e.key === "ArrowLeft"  || e.key === "PageUp")   irA(actual - 1);
   if (e.key === " ") { e.preventDefault(); alternarReproduccion(); }
-  if (e.key.toLowerCase() === "n") $("btnNotas").click();
-  if (e.key.toLowerCase() === "f") $("btnPantalla").click();
+  const k = e.key.toLowerCase();
+  if (k === "n") $("btnNotas").click();
+  if (k === "f") $("btnPantalla").click();
+  if (k === "c" && !document.fullscreenElement) abrirPanel();
 });
 
 /* =====================================================================
-   6) Arranque
+   8) Arranque
    ===================================================================== */
 function mostrarEstado(texto) {
   $("estado").hidden = false;
@@ -485,26 +1017,31 @@ async function iniciarPresentacion() {
   const token = await obtenerToken();
   if (!token) return;
 
-  diapositivas = await armarDiapositivas(token);
-  if (!diapositivas.length) throw new Error("Las diapositivas configuradas no tienen páginas visibles.");
+  await cargarReportesDelEstado();
+  // Lo que se expandió al abrir por primera vez cuenta como estado guardado
+  guardado = copia(estado);
+  marcarCambios();
 
-  construirLaminas();
-  alternarReproduccion(P.autoplay);
-  $("estado").hidden = true;
-  $("barra").hidden = false;
-  await irA(0);
   requestAnimationFrame(tick);
-
   // El token dura ~1 hora; se renueva cada 50 minutos en todos los reportes
   setInterval(async () => {
     const nuevo = await obtenerToken();
     if (nuevo) for (const r of cargados.values()) r.reporte.setAccessToken(nuevo);
   }, 50 * 60 * 1000);
+
+  if (fallas.size && !cargados.size) {
+    errorEnPantalla([...fallas.values()][0]);
+    $("btnConfigurarVacio").hidden = false;
+    return;
+  }
+
+  alternarReproduccion(estado.presentacion.autoplay);
+  aplicarEstado();
 }
 
 (async () => {
-  document.title = P.titulo;
-  $("tituloPresentacion").textContent = P.titulo;
+  document.title = estado.presentacion.titulo;
+  $("tituloPresentacion").textContent = estado.presentacion.titulo;
   try {
     const r = await msal.handleRedirectPromise();
     if (r?.account) msal.setActiveAccount(r.account);
