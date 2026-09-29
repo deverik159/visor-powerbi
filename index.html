@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Presentación de datos</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,400..800&display=swap" rel="stylesheet">
+
+<!-- Librerías oficiales de Microsoft -->
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/powerbi-client@2.23.1/dist/powerbi.min.js"></script>
+
+<style>
+  :root {
+    --asfalto: #1C2830;   /* fondo del escenario */
+    --poste: #2B3A44;     /* barra inferior */
+    --lamina: #E9EDF0;    /* texto principal */
+    --niebla: #93A3AE;    /* texto secundario */
+    --sodio: #F2A93B;     /* acento: luz de valla nocturna */
+    --error: #F07167;
+    --fuente: "Archivo", "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; background: var(--asfalto); color: var(--lamina); font-family: var(--fuente); }
+  body { display: grid; grid-template-rows: 1fr auto; }
+
+  /* Escenario donde vive el reporte */
+  #escenario { position: relative; padding: 16px 16px 0; min-height: 0; }
+  #reporte { width: 100%; height: 100%; border-radius: 6px; overflow: hidden; }
+  #reporte iframe { border: 0; }
+
+  /* Pantalla de acceso / estados */
+  #estado {
+    position: absolute; inset: 0; display: grid; place-content: center; gap: 20px;
+    text-align: center; padding: 24px;
+  }
+  #estado h1 { font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 800; font-stretch: 75%; line-height: 1; letter-spacing: -0.01em; }
+  #estado p { color: var(--niebla); max-width: 46ch; margin-inline: auto; line-height: 1.5; }
+  #estado.error p { color: var(--error); }
+  [hidden] { display: none !important; }
+
+  /* Barra de navegación: los segmentos imitan las láminas de una valla */
+  #barra {
+    display: grid; grid-template-columns: 1fr auto; gap: 8px 24px; align-items: center;
+    padding: 12px 16px 14px; background: var(--poste);
+  }
+  #titulo { font-size: 1.25rem; font-weight: 700; font-stretch: 85%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #contador { color: var(--niebla); font-size: 0.875rem; font-variant-numeric: tabular-nums; margin-left: 12px; font-weight: 400; }
+  #laminas { grid-column: 1 / -1; display: flex; gap: 4px; }
+  #laminas button {
+    flex: 1; height: 6px; border: 0; padding: 0; border-radius: 1px; cursor: pointer;
+    background: rgba(233, 237, 240, 0.18); transition: background 0.2s;
+  }
+  #laminas button.vista { background: rgba(242, 169, 59, 0.45); }
+  #laminas button.actual { background: var(--sodio); }
+  .controles { display: flex; gap: 8px; }
+
+  button.boton {
+    font: inherit; font-weight: 600; font-size: 0.9375rem; cursor: pointer;
+    color: var(--lamina); background: transparent; border: 1px solid rgba(233, 237, 240, 0.28);
+    border-radius: 4px; padding: 8px 14px;
+  }
+  button.boton:hover { border-color: var(--lamina); }
+  button.primario { background: var(--sodio); color: var(--asfalto); border-color: var(--sodio); }
+  button.primario:hover { filter: brightness(1.08); }
+  button:focus-visible { outline: 2px solid var(--sodio); outline-offset: 2px; }
+  button:disabled { opacity: 0.35; cursor: default; }
+
+  /* Notas del presentador */
+  #notas {
+    position: absolute; right: 28px; bottom: 16px; width: min(380px, calc(100% - 56px));
+    background: var(--poste); border-left: 3px solid var(--sodio); border-radius: 4px;
+    padding: 14px 16px; line-height: 1.5; font-size: 0.9375rem; box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  }
+
+  @media (max-width: 640px) {
+    #barra { grid-template-columns: 1fr; }
+    .controles { justify-content: space-between; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<main id="escenario">
+  <div id="reporte"></div>
+  <div id="estado">
+    <h1>Presentación de datos</h1>
+    <p id="mensaje">Inicia sesión con tu cuenta de Microsoft para cargar el reporte.</p>
+    <div><button class="boton primario" id="btnEntrar">Iniciar sesión</button></div>
+  </div>
+  <aside id="notas" hidden></aside>
+</main>
+
+<nav id="barra" aria-label="Navegación de la presentación" hidden>
+  <h2 id="titulo">—<span id="contador"></span></h2>
+  <div class="controles">
+    <button class="boton" id="btnNotas" aria-pressed="false">Notas</button>
+    <button class="boton" id="btnPantalla">Pantalla completa</button>
+    <button class="boton" id="btnAnterior" aria-label="Diapositiva anterior">Anterior</button>
+    <button class="boton primario" id="btnSiguiente" aria-label="Diapositiva siguiente">Siguiente</button>
+  </div>
+  <div id="laminas" role="tablist"></div>
+</nav>
+
+<script>
+/* =====================================================================
+   1) CONFIGURACIÓN — lo único que necesitas editar
+   ===================================================================== */
+const CONFIG = {
+  clientId:    "244983b7-dc4b-4a77-b6d6-5d0d1caae14f",     // Id. de aplicación (Entra ID)
+  tenantId:    "4d97989b-1a29-4b15-a65d-e1c8b49df8cf",     // Id. de directorio (Entra ID)
+  workspaceId: "me",  // "me" = Mi área de trabajo; si es un workspace compartido, pega aquí su GUID (lo que va después de /groups/)
+  reportId:    "5b49e5bf-81b8-4945-a353-abb2400bc9ad",     // solo el GUID que va después de /reports/
+
+  // Cada diapositiva usa una "pagina" (nombre visible o interno) o un "marcador".
+  // Si dejas la lista vacía, se usan todas las páginas visibles del reporte.
+  diapositivas: [
+    // { titulo: "Resumen general",   pagina: "Resumen",            notas: "Mencionar el cierre del trimestre." },
+    // { titulo: "Ocupación por zona", marcador: "Bookmark1a2b3c4d", notas: "Resaltar el crecimiento en Bajío." },
+  ],
+};
+
+/* =====================================================================
+   Diagnóstico: cualquier error se muestra en pantalla, no en silencio
+   ===================================================================== */
+function errorEnPantalla(texto) {
+  document.getElementById("estado").hidden = false;
+  document.getElementById("estado").classList.add("error");
+  document.getElementById("mensaje").textContent = texto;
+}
+window.addEventListener("error", (e) => {
+  if (/file-protocol|msal-no-cargo|powerbi-no-cargo|en-iframe/.test(e.message)) return;
+  errorEnPantalla(`Error: ${e.message}`);
+});
+window.addEventListener("unhandledrejection", (e) => errorEnPantalla(`Error: ${e.reason?.message || e.reason}`));
+
+if (location.protocol === "file:") {
+  errorEnPantalla("Abriste el archivo con doble clic desde tu computadora. El visor solo funciona desde su dirección de GitHub Pages (https://TU-USUARIO.github.io/visor-powerbi/).");
+  throw new Error("file-protocol");
+}
+if (!window.msal) {
+  errorEnPantalla("No se pudo cargar la librería de inicio de sesión (MSAL). Revisa tu conexión o si la red de la empresa bloquea cdn.jsdelivr.net.");
+  throw new Error("msal-no-cargo");
+}
+if (!window.powerbi) {
+  errorEnPantalla("No se pudo cargar la librería de Power BI. Revisa tu conexión o si la red de la empresa bloquea cdn.jsdelivr.net.");
+  throw new Error("powerbi-no-cargo");
+}
+if (window.top !== window.self) {
+  errorEnPantalla("El visor está abierto dentro de una vista previa (iframe) y Microsoft no permite iniciar sesión ahí. Ábrelo en una pestaña normal de Chrome o Edge.");
+  const b = document.getElementById("btnEntrar");
+  b.textContent = "Abrir en una pestaña nueva";
+  b.hidden = false;
+  b.onclick = () => window.open(location.href, "_blank");
+  throw new Error("en-iframe");
+}
+
+/* =====================================================================
+   2) Autenticación con Microsoft (MSAL)
+   ===================================================================== */
+const SCOPES = ["https://analysis.windows.net/powerbi/api/Report.Read.All"];
+const msal = new window.msal.PublicClientApplication({
+  auth: {
+    clientId: CONFIG.clientId,
+    authority: `https://login.microsoftonline.com/${CONFIG.tenantId}`,
+    redirectUri: window.location.origin + window.location.pathname.replace(/index\.html$/i, ""),
+  },
+  cache: { cacheLocation: "sessionStorage" },
+});
+
+async function obtenerToken() {
+  const cuenta = msal.getAllAccounts()[0];
+  try {
+    const r = await msal.acquireTokenSilent({ scopes: SCOPES, account: cuenta });
+    return r.accessToken;
+  } catch {
+    await msal.acquireTokenRedirect({ scopes: SCOPES, account: cuenta });
+  }
+}
+
+/* =====================================================================
+   3) Insertar el reporte
+   ===================================================================== */
+const $ = (id) => document.getElementById(id);
+const models = window["powerbi-client"].models;
+let reporte, paginas = [], diapositivas = [], actual = 0;
+const vistas = new Set();
+
+function mostrarEstado(texto, esError = false) {
+  $("estado").hidden = false;
+  $("estado").classList.toggle("error", esError);
+  $("mensaje").textContent = texto;
+  $("btnEntrar").hidden = !esError && msal.getAllAccounts().length > 0;
+}
+
+async function cargarReporte() {
+  mostrarEstado("Cargando el reporte…");
+  const token = await obtenerToken();
+  if (!token) return;
+
+  const api = (!CONFIG.workspaceId || CONFIG.workspaceId === "me")
+    ? "https://api.powerbi.com/v1.0/myorg"
+    : `https://api.powerbi.com/v1.0/myorg/groups/${CONFIG.workspaceId}`;
+  const resp = await fetch(
+    `${api}/reports/${CONFIG.reportId}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (!resp.ok) {
+    mostrarEstado(`No se pudo abrir el reporte (error ${resp.status}). Revisa que tu cuenta tenga acceso al área de trabajo y que los IDs sean correctos.`, true);
+    return;
+  }
+  const info = await resp.json();
+
+  reporte = powerbi.embed($("reporte"), {
+    type: "report",
+    id: CONFIG.reportId,
+    embedUrl: info.embedUrl,
+    accessToken: token,
+    tokenType: models.TokenType.Aad,
+    settings: {
+      panes: { filters: { visible: false }, pageNavigation: { visible: false } },
+      background: models.BackgroundType.Transparent,
+    },
+  });
+
+  reporte.on("loaded", async () => {
+    paginas = await reporte.getPages();
+    const marcadores = await reporte.bookmarksManager.getBookmarks();
+    // Útil para configurar: abre la consola del navegador (F12) y copia los nombres
+    console.table(paginas.map(p => ({ visible: p.displayName, interno: p.name })));
+    console.table(marcadores.map(m => ({ visible: m.displayName, interno: m.name })));
+
+    diapositivas = CONFIG.diapositivas.length
+      ? CONFIG.diapositivas
+      : paginas.filter(p => p.visibility === 0).map(p => ({ titulo: p.displayName, pagina: p.name }));
+
+    construirLaminas();
+    $("estado").hidden = true;
+    $("barra").hidden = false;
+    irA(0);
+  });
+
+  reporte.on("error", (e) => console.error("Power BI:", e.detail));
+
+  // El token dura ~1 hora; se renueva cada 50 minutos para no cortar la presentación
+  setInterval(async () => {
+    const nuevo = await obtenerToken();
+    if (nuevo) reporte.setAccessToken(nuevo);
+  }, 50 * 60 * 1000);
+}
+
+/* =====================================================================
+   4) Navegación entre diapositivas
+   ===================================================================== */
+function construirLaminas() {
+  $("laminas").innerHTML = "";
+  diapositivas.forEach((d, i) => {
+    const b = document.createElement("button");
+    b.setAttribute("role", "tab");
+    b.setAttribute("aria-label", `Ir a ${d.titulo}`);
+    b.title = d.titulo;
+    b.onclick = () => irA(i);
+    $("laminas").appendChild(b);
+  });
+}
+
+async function irA(i) {
+  if (i < 0 || i >= diapositivas.length) return;
+  actual = i;
+  vistas.add(i);
+  const d = diapositivas[i];
+
+  try {
+    if (d.marcador) {
+      await reporte.bookmarksManager.apply(d.marcador);
+    } else if (d.pagina) {
+      const p = paginas.find(x => x.name === d.pagina || x.displayName === d.pagina);
+      if (p) await p.setActive();
+      else console.warn(`No existe la página "${d.pagina}"`);
+    }
+  } catch (e) { console.error(e); }
+
+  $("titulo").firstChild.textContent = d.titulo;
+  $("contador").textContent = `${i + 1} de ${diapositivas.length}`;
+  $("btnAnterior").disabled = i === 0;
+  $("btnSiguiente").disabled = i === diapositivas.length - 1;
+  [...$("laminas").children].forEach((b, j) => {
+    b.classList.toggle("actual", j === i);
+    b.classList.toggle("vista", vistas.has(j) && j !== i);
+    b.setAttribute("aria-selected", j === i);
+  });
+  $("notas").textContent = d.notas || "Esta diapositiva no tiene notas.";
+}
+
+$("btnSiguiente").onclick = () => irA(actual + 1);
+$("btnAnterior").onclick  = () => irA(actual - 1);
+$("btnNotas").onclick = () => {
+  const oculto = !$("notas").hidden;
+  $("notas").hidden = oculto;
+  $("btnNotas").setAttribute("aria-pressed", !oculto);
+};
+$("btnPantalla").onclick = () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen();
+};
+$("btnEntrar").onclick = async () => {
+  $("mensaje").textContent = "Redirigiendo al inicio de sesión de Microsoft…";
+  try {
+    await msal.loginRedirect({ scopes: SCOPES });
+  } catch (e) {
+    errorEnPantalla(`No se pudo iniciar sesión: ${e.errorCode || ""} ${e.message}`);
+  }
+};
+
+// Flechas del teclado (funcionan cuando el foco está fuera del reporte)
+document.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowRight" || e.key === "PageDown") irA(actual + 1);
+  if (e.key === "ArrowLeft"  || e.key === "PageUp")   irA(actual - 1);
+  if (e.key.toLowerCase() === "n") $("btnNotas").click();
+});
+
+/* =====================================================================
+   5) Arranque
+   ===================================================================== */
+(async () => {
+  if (CONFIG.clientId.startsWith("PEGA_AQUI")) {
+    mostrarEstado("Falta la configuración: edita el bloque CONFIG al inicio del script con tus IDs.", true);
+    $("btnEntrar").hidden = true;
+    return;
+  }
+  try {
+    const r = await msal.handleRedirectPromise();
+    if (r?.account) msal.setActiveAccount(r.account);
+    if (msal.getAllAccounts().length) await cargarReporte();
+    else mostrarEstado("Inicia sesión con tu cuenta de Microsoft para cargar el reporte.");
+  } catch (e) {
+    mostrarEstado(`Error al iniciar sesión: ${e.message}`, true);
+  }
+})();
+</script>
+</body>
+</html>
