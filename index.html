@@ -84,6 +84,17 @@
     .controles { justify-content: space-between; }
   }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+  /* Varios reportes apilados: solo el activo es visible */
+  #reporte { position: relative; }
+  .marco { position: absolute; inset: 0; visibility: hidden; }
+  .marco.activo { visibility: visible; }
+
+  /* El segmento actual se llena conforme corre el tiempo de la diapositiva */
+  #laminas button.actual {
+    background: linear-gradient(90deg, var(--acento) calc(var(--avance, 1) * 100%), #F5C98A 0);
+  }
+  #btnReproducir { min-width: 7.5rem; }
 </style>
 </head>
 <body>
@@ -91,8 +102,8 @@
 <main id="escenario">
   <div id="reporte"></div>
   <div id="estado">
-    <h1>Presentación de datos</h1>
-    <p id="mensaje">Inicia sesión con tu cuenta de Microsoft para cargar el reporte.</p>
+    <h1 id="tituloPresentacion">Presentación de datos</h1>
+    <p id="mensaje">Inicia sesión con tu cuenta de Microsoft para cargar los reportes.</p>
     <div><button class="boton primario" id="btnEntrar">Iniciar sesión</button></div>
   </div>
   <aside id="notas" hidden></aside>
@@ -101,6 +112,7 @@
 <nav id="barra" aria-label="Navegación de la presentación" hidden>
   <h2 id="titulo">—<span id="contador"></span></h2>
   <div class="controles">
+    <button class="boton" id="btnReproducir" aria-pressed="true">Pausar</button>
     <button class="boton" id="btnNotas" aria-pressed="false">Notas</button>
     <button class="boton" id="btnPantalla">Pantalla completa</button>
     <button class="boton" id="btnAnterior" aria-label="Diapositiva anterior">Anterior</button>
@@ -114,35 +126,59 @@
    1) CONFIGURACIÓN — lo único que necesitas editar
    ===================================================================== */
 const CONFIG = {
-  clientId:    "244983b7-dc4b-4a77-b6d6-5d0d1caae14f",     // Id. de aplicación (Entra ID)
-  tenantId:    "4d97989b-1a29-4b15-a65d-e1c8b49df8cf",     // Id. de directorio (Entra ID)
-  workspaceId: "me",  // "me" = Mi área de trabajo; si es un workspace compartido, pega aquí su GUID (lo que va después de /groups/)
-  reportId:    "5b49e5bf-81b8-4945-a353-abb2400bc9ad",     // solo el GUID que va después de /reports/
+  clientId: "244983b7-dc4b-4a77-b6d6-5d0d1caae14f",   // Id. de aplicación (Entra ID)
+  tenantId: "4d97989b-1a29-4b15-a65d-e1c8b49df8cf",   // Id. de directorio (Entra ID)
 
-  // Cada diapositiva usa una "pagina" (nombre visible o interno) o un "marcador".
-  // Si dejas la lista vacía, se usan todas las páginas visibles del reporte.
+  // Opciones generales de la presentación
+  presentacion: {
+    titulo: "Presentación de datos",  // aparece en la pestaña del navegador y al iniciar
+    autoplay: true,                   // true = avanza sola al abrir; false = empieza en pausa
+    duracion: 30,                     // segundos por diapositiva (si la diapositiva no define otra)
+    ciclo: true,                      // true = al terminar vuelve a la primera y sigue
+    pausarAlInteractuar: true,        // true = si haces clic en un visual, se pausa el avance
+    ajuste: "pagina",                 // "pagina" (completa), "ancho" (llena el ancho) o "real" (tamaño original)
+  },
+
+  /* Diapositivas, en el orden en que se muestran.
+     Para cada una, abre la página en app.powerbi.com y copia la URL completa de la barra de direcciones.
+     Opciones por diapositiva (todas opcionales excepto url):
+       titulo          → texto de la barra inferior (si no lo pones, usa el nombre de la página)
+       duracion        → segundos que dura esta diapositiva; 0 = no avanza sola
+       notas           → notas del presentador (tecla N)
+       marcador        → nombre interno de un marcador del reporte (ver consola F12)
+       ajuste          → "pagina", "ancho" o "real" solo para esta diapositiva
+       todasLasPaginas → true = convierte cada página visible del reporte en una diapositiva */
   diapositivas: [
-    // { titulo: "Resumen general",   pagina: "Resumen",            notas: "Mencionar el cierre del trimestre." },
-    // { titulo: "Ocupación por zona", marcador: "Bookmark1a2b3c4d", notas: "Resaltar el crecimiento en Bajío." },
+    {
+      url: "https://app.powerbi.com/groups/me/reports/5b49e5bf-81b8-4945-a353-abb2400bc9ad",
+      todasLasPaginas: true,
+      duracion: 20,
+    },
+
+    // Ejemplos (quita las // para usarlos):
+    // { url: "https://app.powerbi.com/groups/me/reports/5b49e5bf-81b8-4945-a353-abb2400bc9ad/45ece729167e8167e3db",
+    //   titulo: "Tendencia de reciclajes", duracion: 45, notas: "Comentar la caída de junio." },
+    // { url: "https://app.powerbi.com/groups/OTRO-WORKSPACE/reports/OTRO-REPORTE/PAGINA",
+    //   titulo: "Ocupación Vía Verde", ajuste: "ancho" },
+    // { url: "https://app.powerbi.com/groups/me/reports/5b49e5bf-81b8-4945-a353-abb2400bc9ad",
+    //   marcador: "Bookmark1a2b3c4d", titulo: "Solo máquinas de Querétaro", duracion: 15 },
   ],
 };
 
 /* =====================================================================
    Diagnóstico: cualquier error se muestra en pantalla, no en silencio
    ===================================================================== */
+const AVISOS = /file-protocol|msal-no-cargo|powerbi-no-cargo|en-iframe/;
 function errorEnPantalla(texto) {
   document.getElementById("estado").hidden = false;
   document.getElementById("estado").classList.add("error");
   document.getElementById("mensaje").textContent = texto;
 }
-window.addEventListener("error", (e) => {
-  if (/file-protocol|msal-no-cargo|powerbi-no-cargo|en-iframe/.test(e.message)) return;
-  errorEnPantalla(`Error: ${e.message}`);
-});
+window.addEventListener("error", (e) => { if (!AVISOS.test(e.message)) errorEnPantalla(`Error: ${e.message}`); });
 window.addEventListener("unhandledrejection", (e) => errorEnPantalla(`Error: ${e.reason?.message || e.reason}`));
 
 if (location.protocol === "file:") {
-  errorEnPantalla("Abriste el archivo con doble clic desde tu computadora. El visor solo funciona desde su dirección de GitHub Pages (https://TU-USUARIO.github.io/visor-powerbi/).");
+  errorEnPantalla("Abriste el archivo con doble clic desde tu computadora. El visor solo funciona desde su dirección de GitHub Pages.");
   throw new Error("file-protocol");
 }
 if (!window.msal) {
@@ -186,78 +222,122 @@ async function obtenerToken() {
 }
 
 /* =====================================================================
-   3) Insertar el reporte
+   3) Carga de reportes (uno por cada reporte distinto en las diapositivas)
    ===================================================================== */
 const $ = (id) => document.getElementById(id);
 const models = window["powerbi-client"].models;
-let reporte, paginas = [], diapositivas = [], actual = 0;
+const AJUSTES = {
+  pagina: models.DisplayOption.FitToPage,
+  ancho:  models.DisplayOption.FitToWidth,
+  real:   models.DisplayOption.ActualSize,
+};
+const P = Object.assign(
+  { titulo: "Presentación de datos", autoplay: true, duracion: 30, ciclo: true, pausarAlInteractuar: true, ajuste: "pagina" },
+  CONFIG.presentacion
+);
+
+const reportes = new Map();   // reportId → promesa del reporte cargado
+const cargados = new Map();   // reportId → reporte ya cargado
+let diapositivas = [], actual = 0, reproduciendo = P.autoplay, transcurrido = 0, ultimoTick = 0;
 const vistas = new Set();
 
-function mostrarEstado(texto, esError = false) {
-  $("estado").hidden = false;
-  $("estado").classList.toggle("error", esError);
-  $("mensaje").textContent = texto;
-  $("btnEntrar").hidden = !esError && msal.getAllAccounts().length > 0;
+function parsearUrl(url) {
+  if (/\/apps\//i.test(url)) {
+    throw new Error(`Esta URL es de una App de Power BI y no es compatible. Abre el reporte desde su área de trabajo y copia esa URL: ${url}`);
+  }
+  const m = String(url).match(/groups\/([^/?#]+)\/reports\/([0-9a-f-]{36})(?:\/([^/?#]+))?/i);
+  if (!m) throw new Error(`No reconozco esta URL de Power BI: ${url}`);
+  return { workspace: m[1], reportId: m[2], pagina: m[3] };
 }
 
-async function cargarReporte() {
-  mostrarEstado("Cargando el reporte…");
-  const token = await obtenerToken();
-  if (!token) return;
+function obtenerReporte(workspace, reportId, token) {
+  if (!reportes.has(reportId)) reportes.set(reportId, crearReporte(workspace, reportId, token));
+  return reportes.get(reportId);
+}
 
-  const api = (!CONFIG.workspaceId || CONFIG.workspaceId === "me")
+async function crearReporte(workspace, reportId, token) {
+  const api = workspace === "me"
     ? "https://api.powerbi.com/v1.0/myorg"
-    : `https://api.powerbi.com/v1.0/myorg/groups/${CONFIG.workspaceId}`;
-  const resp = await fetch(
-    `${api}/reports/${CONFIG.reportId}`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
+    : `https://api.powerbi.com/v1.0/myorg/groups/${workspace}`;
+  const resp = await fetch(`${api}/reports/${reportId}`, { headers: { Authorization: `Bearer ${token}` } });
   if (!resp.ok) {
-    mostrarEstado(`No se pudo abrir el reporte (error ${resp.status}). Revisa que tu cuenta tenga acceso al área de trabajo y que los IDs sean correctos.`, true);
-    return;
+    throw new Error(`No se pudo abrir el reporte ${reportId} (error ${resp.status}). Revisa que la URL sea correcta y que tu cuenta tenga acceso a ese espacio de trabajo.`);
   }
   const info = await resp.json();
 
-  reporte = powerbi.embed($("reporte"), {
+  const contenedor = document.createElement("div");
+  contenedor.className = "marco";
+  $("reporte").appendChild(contenedor);
+
+  const ajusteInicial = AJUSTES[P.ajuste] ?? AJUSTES.pagina;
+  const reporte = powerbi.embed(contenedor, {
     type: "report",
-    id: CONFIG.reportId,
+    id: reportId,
     embedUrl: info.embedUrl,
     accessToken: token,
     tokenType: models.TokenType.Aad,
     settings: {
       panes: { filters: { visible: false }, pageNavigation: { visible: false } },
-      background: models.BackgroundType.Default,  // respeta el fondo original de cada página del reporte
+      background: models.BackgroundType.Default,
+      layoutType: models.LayoutType.Custom,
+      customLayout: { displayOption: ajusteInicial },
     },
   });
 
-  reporte.on("loaded", async () => {
-    paginas = await reporte.getPages();
-    const marcadores = await reporte.bookmarksManager.getBookmarks();
-    // Útil para configurar: abre la consola del navegador (F12) y copia los nombres
-    console.table(paginas.map(p => ({ visible: p.displayName, interno: p.name })));
-    console.table(marcadores.map(m => ({ visible: m.displayName, interno: m.name })));
+  const entrada = { reportId, nombre: info.name, contenedor, reporte, paginas: [], ajusteActual: ajusteInicial };
 
-    diapositivas = CONFIG.diapositivas.length
-      ? CONFIG.diapositivas
-      : paginas.filter(p => p.visibility === 0).map(p => ({ titulo: p.displayName, pagina: p.name }));
-
-    construirLaminas();
-    $("estado").hidden = true;
-    $("barra").hidden = false;
-    irA(0);
+  await new Promise((listo, falla) => {
+    let yaCargo = false;
+    reporte.on("loaded", async () => {
+      yaCargo = true;
+      entrada.paginas = await reporte.getPages();
+      const marcadores = await reporte.bookmarksManager.getBookmarks();
+      // Útil para configurar: en la consola (F12) aparecen los nombres de páginas y marcadores
+      console.log(`Reporte: ${info.name}`);
+      console.table(entrada.paginas.map(p => ({ pagina: p.displayName, nombreInterno: p.name })));
+      if (marcadores.length) console.table(marcadores.map(m => ({ marcador: m.displayName, nombreInterno: m.name })));
+      listo();
+    });
+    reporte.on("error", (e) => {
+      console.error(`Power BI (${info.name}):`, e.detail);
+      if (!yaCargo) falla(new Error(`Power BI no pudo cargar "${info.name}": ${e.detail?.message || "error desconocido"}`));
+    });
   });
 
-  reporte.on("error", (e) => console.error("Power BI:", e.detail));
+  if (P.pausarAlInteractuar) {
+    const pausarPorClic = () => { if (reproduciendo) alternarReproduccion(false); };
+    ["visualClicked", "dataSelected", "buttonClicked"].forEach(ev => reporte.on(ev, pausarPorClic));
+  }
 
-  // El token dura ~1 hora; se renueva cada 50 minutos para no cortar la presentación
-  setInterval(async () => {
-    const nuevo = await obtenerToken();
-    if (nuevo) reporte.setAccessToken(nuevo);
-  }, 50 * 60 * 1000);
+  cargados.set(reportId, entrada);
+  return entrada;
+}
+
+async function armarDiapositivas(token) {
+  if (!CONFIG.diapositivas?.length) throw new Error("Agrega al menos una diapositiva en CONFIG.diapositivas.");
+  const urls = CONFIG.diapositivas.map(d => parsearUrl(d.url));
+
+  // Todos los reportes se cargan en paralelo para que el cambio entre ellos sea inmediato
+  const entradas = await Promise.all(urls.map(u => obtenerReporte(u.workspace, u.reportId, token)));
+
+  const lista = [];
+  CONFIG.diapositivas.forEach((d, i) => {
+    const r = entradas[i];
+    if (d.todasLasPaginas) {
+      r.paginas.filter(p => p.visibility === 0).forEach(p =>
+        lista.push({ ...d, reportId: r.reportId, pagina: p.name, titulo: p.displayName }));
+      return;
+    }
+    const buscada = d.pagina || urls[i].pagina;
+    const pag = buscada ? r.paginas.find(p => p.name === buscada || p.displayName === buscada) : null;
+    if (buscada && !pag) console.warn(`No existe la página "${buscada}" en "${r.nombre}"; se mostrará la página inicial.`);
+    lista.push({ ...d, reportId: r.reportId, pagina: pag?.name, titulo: d.titulo || pag?.displayName || r.nombre });
+  });
+  return lista;
 }
 
 /* =====================================================================
-   4) Navegación entre diapositivas
+   4) Navegación, temporizador y ciclo
    ===================================================================== */
 function construirLaminas() {
   $("laminas").innerHTML = "";
@@ -272,35 +352,96 @@ function construirLaminas() {
 }
 
 async function irA(i) {
-  if (i < 0 || i >= diapositivas.length) return;
+  if (!diapositivas.length) return;
+  const total = diapositivas.length;
+  if (i >= total) {
+    if (!P.ciclo) { alternarReproduccion(false); return; }
+    i = 0;
+  }
+  if (i < 0) i = P.ciclo ? total - 1 : 0;
+
   actual = i;
+  transcurrido = 0;
   vistas.add(i);
   const d = diapositivas[i];
+  const r = cargados.get(d.reportId);
 
   try {
     if (d.marcador) {
-      await reporte.bookmarksManager.apply(d.marcador);
+      await r.reporte.bookmarksManager.apply(d.marcador);
     } else if (d.pagina) {
-      const p = paginas.find(x => x.name === d.pagina || x.displayName === d.pagina);
+      const p = r.paginas.find(x => x.name === d.pagina);
       if (p) await p.setActive();
-      else console.warn(`No existe la página "${d.pagina}"`);
+    }
+    const ajuste = AJUSTES[d.ajuste || P.ajuste] ?? AJUSTES.pagina;
+    if (ajuste !== r.ajusteActual) {
+      await r.reporte.updateSettings({ layoutType: models.LayoutType.Custom, customLayout: { displayOption: ajuste } });
+      r.ajusteActual = ajuste;
     }
   } catch (e) { console.error(e); }
 
-  $("titulo").firstChild.textContent = d.titulo;
-  $("contador").textContent = `${i + 1} de ${diapositivas.length}`;
-  $("btnAnterior").disabled = i === 0;
-  $("btnSiguiente").disabled = i === diapositivas.length - 1;
-  [...$("laminas").children].forEach((b, j) => {
-    b.classList.toggle("actual", j === i);
-    b.classList.toggle("vista", vistas.has(j) && j !== i);
-    b.setAttribute("aria-selected", j === i);
-  });
-  $("notas").textContent = d.notas || "Esta diapositiva no tiene notas.";
+  // Si mientras cargaba se cambió de diapositiva, no mostrar esta
+  if (actual !== i) return;
+  for (const x of cargados.values()) x.contenedor.classList.toggle("activo", x === r);
+  actualizarBarra();
 }
 
+function actualizarBarra() {
+  const d = diapositivas[actual];
+  const total = diapositivas.length;
+  $("titulo").firstChild.textContent = d.titulo;
+  $("contador").textContent = `${actual + 1} de ${total}`;
+  $("btnAnterior").disabled = !P.ciclo && actual === 0;
+  $("btnSiguiente").disabled = !P.ciclo && actual === total - 1;
+  [...$("laminas").children].forEach((b, j) => {
+    b.classList.toggle("actual", j === actual);
+    b.classList.toggle("vista", vistas.has(j) && j !== actual);
+    b.setAttribute("aria-selected", j === actual);
+    if (j !== actual) b.style.removeProperty("--avance");
+  });
+  $("notas").textContent = d.notas || "Esta diapositiva no tiene notas.";
+  pintarAvance();
+}
+
+function duracionDe(d) {
+  return (d.duracion ?? P.duracion) * 1000;
+}
+
+function pintarAvance() {
+  const b = $("laminas").children[actual];
+  if (!b) return;
+  const dur = duracionDe(diapositivas[actual]);
+  const avance = dur > 0 && reproduciendo ? Math.min(transcurrido / dur, 1) : 1;
+  b.style.setProperty("--avance", avance);
+}
+
+function tick(ahora) {
+  const dt = ultimoTick ? ahora - ultimoTick : 0;
+  ultimoTick = ahora;
+  if (reproduciendo && diapositivas.length && !document.hidden) {
+    const dur = duracionDe(diapositivas[actual]);
+    if (dur > 0) {
+      transcurrido += dt;
+      pintarAvance();
+      if (transcurrido >= dur) irA(actual + 1);
+    }
+  }
+  requestAnimationFrame(tick);
+}
+
+function alternarReproduccion(forzar) {
+  reproduciendo = typeof forzar === "boolean" ? forzar : !reproduciendo;
+  $("btnReproducir").textContent = reproduciendo ? "Pausar" : "Reproducir";
+  $("btnReproducir").setAttribute("aria-pressed", reproduciendo);
+  pintarAvance();
+}
+
+/* =====================================================================
+   5) Controles
+   ===================================================================== */
 $("btnSiguiente").onclick = () => irA(actual + 1);
 $("btnAnterior").onclick  = () => irA(actual - 1);
+$("btnReproducir").onclick = () => alternarReproduccion();
 $("btnNotas").onclick = () => {
   const oculto = !$("notas").hidden;
   $("notas").hidden = oculto;
@@ -319,29 +460,58 @@ $("btnEntrar").onclick = async () => {
   }
 };
 
-// Flechas del teclado (funcionan cuando el foco está fuera del reporte)
+// Teclado (funciona cuando el foco está fuera del reporte)
 document.addEventListener("keydown", (e) => {
+  if (e.target.closest?.("button") && (e.key === " " || e.key === "Enter")) return;
   if (e.key === "ArrowRight" || e.key === "PageDown") irA(actual + 1);
   if (e.key === "ArrowLeft"  || e.key === "PageUp")   irA(actual - 1);
+  if (e.key === " ") { e.preventDefault(); alternarReproduccion(); }
   if (e.key.toLowerCase() === "n") $("btnNotas").click();
+  if (e.key.toLowerCase() === "f") $("btnPantalla").click();
 });
 
 /* =====================================================================
-   5) Arranque
+   6) Arranque
    ===================================================================== */
+function mostrarEstado(texto) {
+  $("estado").hidden = false;
+  $("estado").classList.remove("error");
+  $("mensaje").textContent = texto;
+  $("btnEntrar").hidden = msal.getAllAccounts().length > 0;
+}
+
+async function iniciarPresentacion() {
+  mostrarEstado("Cargando los reportes…");
+  const token = await obtenerToken();
+  if (!token) return;
+
+  diapositivas = await armarDiapositivas(token);
+  if (!diapositivas.length) throw new Error("Las diapositivas configuradas no tienen páginas visibles.");
+
+  construirLaminas();
+  alternarReproduccion(P.autoplay);
+  $("estado").hidden = true;
+  $("barra").hidden = false;
+  await irA(0);
+  requestAnimationFrame(tick);
+
+  // El token dura ~1 hora; se renueva cada 50 minutos en todos los reportes
+  setInterval(async () => {
+    const nuevo = await obtenerToken();
+    if (nuevo) for (const r of cargados.values()) r.reporte.setAccessToken(nuevo);
+  }, 50 * 60 * 1000);
+}
+
 (async () => {
-  if (CONFIG.clientId.startsWith("PEGA_AQUI")) {
-    mostrarEstado("Falta la configuración: edita el bloque CONFIG al inicio del script con tus IDs.", true);
-    $("btnEntrar").hidden = true;
-    return;
-  }
+  document.title = P.titulo;
+  $("tituloPresentacion").textContent = P.titulo;
   try {
     const r = await msal.handleRedirectPromise();
     if (r?.account) msal.setActiveAccount(r.account);
-    if (msal.getAllAccounts().length) await cargarReporte();
-    else mostrarEstado("Inicia sesión con tu cuenta de Microsoft para cargar el reporte.");
+    if (msal.getAllAccounts().length) await iniciarPresentacion();
+    else mostrarEstado("Inicia sesión con tu cuenta de Microsoft para cargar los reportes.");
   } catch (e) {
-    mostrarEstado(`Error al iniciar sesión: ${e.message}`, true);
+    errorEnPantalla(e.message);
   }
 })();
 </script>
