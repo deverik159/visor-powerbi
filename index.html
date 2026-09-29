@@ -13,65 +13,70 @@
 
 <style>
   :root {
-    --asfalto: #1C2830;   /* fondo del escenario */
-    --poste: #2B3A44;     /* barra inferior */
-    --lamina: #E9EDF0;    /* texto principal */
-    --niebla: #93A3AE;    /* texto secundario */
-    --sodio: #F2A93B;     /* acento: luz de valla nocturna */
-    --error: #F07167;
+    --fondo: #EEF1F4;       /* escenario claro alrededor del reporte */
+    --barra: #FFFFFF;       /* barra de navegación */
+    --texto: #1C2830;       /* texto principal */
+    --secundario: #5B6B76;  /* texto secundario */
+    --linea: #D5DCE1;       /* bordes y separadores */
+    --acento: #E8952A;      /* acento: segmento actual y botón principal */
+    --error: #C0392B;
     --fuente: "Archivo", "Segoe UI", system-ui, sans-serif;
   }
   * { box-sizing: border-box; margin: 0; }
-  html, body { height: 100%; background: var(--asfalto); color: var(--lamina); font-family: var(--fuente); }
+  html, body { height: 100%; background: var(--fondo); color: var(--texto); font-family: var(--fuente); }
   body { display: grid; grid-template-rows: 1fr auto; }
 
-  /* Escenario donde vive el reporte */
-  #escenario { position: relative; padding: 16px 16px 0; min-height: 0; }
-  #reporte { width: 100%; height: 100%; border-radius: 6px; overflow: hidden; }
+  /* Escenario: el reporte va sobre una "hoja" blanca con sombra para separarlo del fondo */
+  #escenario { position: relative; padding: 16px 16px 12px; min-height: 0; }
+  #reporte {
+    width: 100%; height: 100%; border-radius: 6px; overflow: hidden;
+    background: #FFFFFF; box-shadow: 0 1px 3px rgba(28, 40, 48, 0.12), 0 6px 20px rgba(28, 40, 48, 0.08);
+  }
   #reporte iframe { border: 0; }
 
   /* Pantalla de acceso / estados */
   #estado {
     position: absolute; inset: 0; display: grid; place-content: center; gap: 20px;
-    text-align: center; padding: 24px;
+    text-align: center; padding: 24px; background: var(--fondo);
   }
   #estado h1 { font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 800; font-stretch: 75%; line-height: 1; letter-spacing: -0.01em; }
-  #estado p { color: var(--niebla); max-width: 46ch; margin-inline: auto; line-height: 1.5; }
+  #estado p { color: var(--secundario); max-width: 46ch; margin-inline: auto; line-height: 1.5; }
   #estado.error p { color: var(--error); }
   [hidden] { display: none !important; }
 
-  /* Barra de navegación: los segmentos imitan las láminas de una valla */
+  /* Barra de navegación */
   #barra {
-    display: grid; grid-template-columns: 1fr auto; gap: 8px 24px; align-items: center;
-    padding: 12px 16px 14px; background: var(--poste);
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 24px; align-items: center;
+    padding: 12px 16px 14px; background: var(--barra); border-top: 1px solid var(--linea);
   }
   #titulo { font-size: 1.25rem; font-weight: 700; font-stretch: 85%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #contador { color: var(--niebla); font-size: 0.875rem; font-variant-numeric: tabular-nums; margin-left: 12px; font-weight: 400; }
+  #contador { color: var(--secundario); font-size: 0.875rem; font-variant-numeric: tabular-nums; margin-left: 12px; font-weight: 400; }
   #laminas { grid-column: 1 / -1; display: flex; gap: 4px; }
   #laminas button {
     flex: 1; height: 6px; border: 0; padding: 0; border-radius: 1px; cursor: pointer;
-    background: rgba(233, 237, 240, 0.18); transition: background 0.2s;
+    background: #DDE3E8; transition: background 0.2s;
   }
-  #laminas button.vista { background: rgba(242, 169, 59, 0.45); }
-  #laminas button.actual { background: var(--sodio); }
+  #laminas button:hover { background: #C3CCD3; }
+  #laminas button.vista { background: #F5C98A; }
+  #laminas button.actual { background: var(--acento); }
   .controles { display: flex; gap: 8px; }
 
   button.boton {
     font: inherit; font-weight: 600; font-size: 0.9375rem; cursor: pointer;
-    color: var(--lamina); background: transparent; border: 1px solid rgba(233, 237, 240, 0.28);
+    color: var(--texto); background: #FFFFFF; border: 1px solid var(--linea);
     border-radius: 4px; padding: 8px 14px;
   }
-  button.boton:hover { border-color: var(--lamina); }
-  button.primario { background: var(--sodio); color: var(--asfalto); border-color: var(--sodio); }
-  button.primario:hover { filter: brightness(1.08); }
-  button:focus-visible { outline: 2px solid var(--sodio); outline-offset: 2px; }
-  button:disabled { opacity: 0.35; cursor: default; }
+  button.boton:hover { border-color: var(--secundario); }
+  button.primario { background: var(--acento); color: #FFFFFF; border-color: var(--acento); }
+  button.primario:hover { filter: brightness(0.95); }
+  button:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+  button:disabled { opacity: 0.4; cursor: default; }
 
   /* Notas del presentador */
   #notas {
-    position: absolute; right: 28px; bottom: 16px; width: min(380px, calc(100% - 56px));
-    background: var(--poste); border-left: 3px solid var(--sodio); border-radius: 4px;
-    padding: 14px 16px; line-height: 1.5; font-size: 0.9375rem; box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    position: absolute; right: 28px; bottom: 24px; width: min(380px, calc(100% - 56px));
+    background: #FFFFFF; border: 1px solid var(--linea); border-left: 3px solid var(--acento); border-radius: 4px;
+    padding: 14px 16px; line-height: 1.5; font-size: 0.9375rem; box-shadow: 0 8px 24px rgba(28, 40, 48, 0.15);
   }
 
   @media (max-width: 640px) {
@@ -221,7 +226,7 @@ async function cargarReporte() {
     tokenType: models.TokenType.Aad,
     settings: {
       panes: { filters: { visible: false }, pageNavigation: { visible: false } },
-      background: models.BackgroundType.Transparent,
+      background: models.BackgroundType.Default,  // respeta el fondo original de cada página del reporte
     },
   });
 
