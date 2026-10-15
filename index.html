@@ -94,6 +94,14 @@
   }
   body.pantalla-completa.con-linea #lineaProgreso { display: block; }
 
+  /* Aviso flotante */
+  #aviso {
+    position: fixed; left: 16px; bottom: 16px; max-width: min(520px, calc(100vw - 32px)); z-index: 25;
+    background: #1C2830; color: #FFFFFF; border-left: 3px solid var(--acento); border-radius: 4px;
+    padding: 10px 14px; font-size: 0.875rem; line-height: 1.4; box-shadow: 0 8px 24px rgba(28, 40, 48, 0.25);
+  }
+  body.pantalla-completa #aviso { display: none; }
+
   /* Panel de configuración */
   #panel {
     position: fixed; top: 0; right: 0; height: 100%; width: min(480px, 100vw); z-index: 20;
@@ -182,6 +190,7 @@
 </nav>
 
 <div id="lineaProgreso"></div>
+<div id="aviso" role="status" aria-live="polite" hidden></div>
 
 <aside id="panel" aria-label="Configuración de la presentación" hidden>
   <header>
@@ -249,6 +258,7 @@
         <button class="boton chico" id="btnExportar">Exportar</button>
         <button class="boton chico" id="btnImportar">Importar</button>
         <button class="boton chico" id="btnRestablecer">Restablecer</button>
+        <button class="boton chico" id="btnRecargarReportes">Recargar reportes</button>
         <input type="file" id="archivoImportar" accept="application/json,.json" hidden>
       </div>
     </section>
@@ -293,12 +303,27 @@ const CONFIG = {
    Diagnóstico: cualquier error se muestra en pantalla, no en silencio
    ===================================================================== */
 const AVISOS = /file-protocol|msal-no-cargo|powerbi-no-cargo|en-iframe/;
+const textoDe = (x) => (x && typeof x === "object" ? (x.message || x.detailedMessage || JSON.stringify(x)) : String(x ?? "Error desconocido"));
 function errorEnPantalla(texto) {
   document.getElementById("estado").hidden = false;
   document.getElementById("estado").classList.add("error");
-  document.getElementById("mensaje").textContent = texto;
+  document.getElementById("mensaje").textContent = textoDe(texto);
 }
-window.addEventListener("error", (e) => { if (!AVISOS.test(e.message)) errorEnPantalla(`Error: ${e.message}`); });
+// Aviso temporal que no tapa la presentación (los errores después de arrancar nunca deben bloquearla)
+let avisoTimer = null;
+function avisar(texto, ms = 8000) {
+  const el = document.getElementById("aviso");
+  el.textContent = textoDe(texto);
+  el.hidden = false;
+  clearTimeout(avisoTimer);
+  avisoTimer = setTimeout(() => { el.hidden = true; }, ms);
+}
+let arrancado = false;
+window.addEventListener("error", (e) => {
+  if (AVISOS.test(e.message || "")) return;
+  console.error("Error no controlado:", e.error || e.message);
+  if (arrancado) avisar(`Error: ${e.message || "desconocido"}`); else errorEnPantalla(`Error: ${e.message || "desconocido"}`);
+});
 window.addEventListener("unhandledrejection", (e) => console.error("Promesa rechazada:", e.reason));
 
 if (location.protocol === "file:") {
@@ -335,15 +360,37 @@ const msal = new window.msal.PublicClientApplication({
   cache: { cacheLocation: "sessionStorage" },
 });
 
-async function obtenerToken() {
+let tokenVence = 0;
+async function obtenerToken({ forzar = false } = {}) {
   const cuenta = msal.getAllAccounts()[0];
   try {
-    const r = await msal.acquireTokenSilent({ scopes: SCOPES, account: cuenta });
+    const r = await msal.acquireTokenSilent({ scopes: SCOPES, account: cuenta, forceRefresh: forzar });
+    tokenVence = r.expiresOn ? new Date(r.expiresOn).getTime() : Date.now() + 55 * 60 * 1000;
     return r.accessToken;
-  } catch {
+  } catch (e) {
+    console.warn("No se pudo renovar el token en silencio; se pedirá inicio de sesión.", e);
     await msal.acquireTokenRedirect({ scopes: SCOPES, account: cuenta });
   }
 }
+
+// Renueva el token en todos los reportes. Se llama antes de que venza o cuando Power BI avisa que ya venció.
+let renovacion = null;
+function renovarToken(motivo) {
+  if (renovacion) return renovacion;
+  renovacion = (async () => {
+    const nuevo = await obtenerToken({ forzar: true });
+    if (!nuevo) return;
+    for (const r of cargados.values()) {
+      try { await r.reporte.setAccessToken(nuevo); } catch (e) { console.warn("setAccessToken:", e); }
+      if (r.conError) recargarReporte(r);
+    }
+    console.log(`Token renovado (${motivo}); vence ${new Date(tokenVence).toLocaleTimeString()}`);
+  })().catch(e => console.error("Renovación de token:", e)).finally(() => { renovacion = null; });
+  return renovacion;
+}
+setInterval(() => {
+  if (cargados.size && Date.now() > tokenVence - 5 * 60 * 1000) renovarToken("programada");
+}, 60 * 1000);
 
 /* =====================================================================
    3) Estado de la configuración (guardado en el navegador)
@@ -463,20 +510,35 @@ async function crearReporte({ workspace, reportId }) {
 
   await new Promise((listo, falla) => {
     reporte.on("loaded", async () => {
-      entrada.paginas = await reporte.getPages();
-      entrada.marcadores = await reporte.bookmarksManager.getBookmarks();
+      try {
+        entrada.paginas = await conTiempo(reporte.getPages(), 20000);
+        entrada.marcadores = await conTiempo(reporte.bookmarksManager.getBookmarks(), 20000).catch(() => []);
+      } catch (e) {
+        console.error(`No se pudieron leer las páginas de "${info.name}":`, e);
+        if (!entrada.listo) falla(new Error(`No se pudieron leer las páginas de "${info.name}".`));
+        return;
+      }
       entrada.ajusteActual = ajusteInicial;
+      entrada.conError = false;
       if (entrada.listo) {
-        // Se recargó el reporte: volver a mostrar la diapositiva en curso
-        if (diapositivas[actual]?.reportId === reportId) irA(actual, { reiniciarTiempo: false });
+        // Se recargó el reporte
+        const avisarRecarga = entrada.alRecargar;
+        entrada.alRecargar = null;
+        if (avisarRecarga) avisarRecarga();
+        else if (diapositivas[actual]?.reportId === reportId) irA(actual, { reiniciarTiempo: false });
         return;
       }
       entrada.listo = true;
       listo();
     });
     reporte.on("error", (e) => {
-      console.error(`Power BI (${info.name}):`, e.detail);
-      if (!entrada.listo) falla(new Error(`Power BI no pudo cargar "${info.name}": ${e.detail?.message || "error desconocido"}`));
+      const d = e.detail || {};
+      console.error(`Power BI (${info.name}):`, d);
+      if (!entrada.listo) { falla(new Error(`Power BI no pudo cargar "${info.name}": ${d.message || "error desconocido"}`)); return; }
+      entrada.conError = true;
+      const texto = `${d.message || ""} ${d.detailedMessage || ""}`;
+      if (/TokenExpired|token|401|Unauthorized/i.test(texto)) renovarToken("Power BI avisó que venció");
+      else avisar(`Power BI reportó un problema en "${info.name}": ${d.message || "sin detalle"}`);
     });
   });
 
@@ -486,6 +548,25 @@ async function crearReporte({ workspace, reportId }) {
   fallas.delete(reportId);
   cargados.set(reportId, entrada);
   return entrada;
+}
+
+function conTiempo(promesa, ms) {
+  return new Promise((ok, falla) => {
+    const t = setTimeout(() => falla(new Error(`Power BI no respondió en ${ms / 1000} segundos`)), ms);
+    Promise.resolve(promesa).then(v => { clearTimeout(t); ok(v); }, e => { clearTimeout(t); falla(e); });
+  });
+}
+
+// Recarga un reporte y espera a que vuelva a estar listo (máximo 30 s)
+function recargarReporte(r) {
+  if (r.recargando) return r.recargando;
+  r.recargando = new Promise((ok) => {
+    const fin = () => { r.recargando = null; ok(); };
+    r.alRecargar = fin;
+    const t = setTimeout(() => { if (r.alRecargar === fin) { r.alRecargar = null; fin(); } }, 30000);
+    r.reporte.reload().catch(e => { console.warn("reload:", e); clearTimeout(t); r.alRecargar = null; fin(); });
+  });
+  return r.recargando;
 }
 
 function paginasVisibles(r) {
@@ -593,23 +674,35 @@ async function irA(i, { reiniciarTiempo = true } = {}) {
   await mostrar(i);
 }
 
-async function mostrar(i) {
+async function mostrar(i, reintento = false) {
   const d = diapositivas[i];
   const r = cargados.get(d.reportId);
   if (!r) return;
   try {
+    if (r.recargando) await r.recargando;
     if (d.marcador) {
-      await r.reporte.bookmarksManager.apply(d.marcador);
+      await conTiempo(r.reporte.bookmarksManager.apply(d.marcador), 15000);
     } else if (d.pagina) {
       const p = r.paginas.find(x => x.name === d.pagina);
-      if (p) await p.setActive();
+      if (p) await conTiempo(p.setActive(), 15000);
     }
     const ajuste = AJUSTES[d.ajuste || estado.presentacion.ajuste] ?? AJUSTES.pagina;
     if (ajuste !== r.ajusteActual) {
-      await r.reporte.updateSettings({ layoutType: models.LayoutType.Custom, customLayout: { displayOption: ajuste } });
+      await conTiempo(r.reporte.updateSettings({ layoutType: models.LayoutType.Custom, customLayout: { displayOption: ajuste } }), 15000);
       r.ajusteActual = ajuste;
     }
-  } catch (e) { console.error(e); }
+  } catch (e) {
+    console.error(`No se pudo mostrar "${tituloDe(d)}":`, e);
+    if (actual !== i) return;
+    if (!reintento) {
+      // El reporte dejó de responder: se recarga y se intenta una vez más
+      avisar(`"${r.nombre}" no respondió; recargando el reporte…`);
+      if (Date.now() > tokenVence - 60 * 1000) await renovarToken("fallo al mostrar");
+      await recargarReporte(r);
+      if (actual === i) return mostrar(i, true);
+      return;
+    }
+  }
 
   if (actual !== i) return;   // se cambió de diapositiva mientras cargaba
   for (const x of cargados.values()) x.contenedor.classList.toggle("activo", x === r);
@@ -673,7 +766,7 @@ setInterval(() => {
   const ahora = Date.now();
   if (recargarMin > 0 && ahora - ultimaRecarga >= recargarMin * 60000) {
     ultimaRecarga = ahora; ultimaActualizacion = ahora;
-    for (const r of cargados.values()) r.reporte.reload().catch(e => console.warn("Recarga:", e));
+    for (const r of cargados.values()) recargarReporte(r);
   } else if (actualizarDatosMin > 0 && ahora - ultimaActualizacion >= actualizarDatosMin * 60000) {
     ultimaActualizacion = ahora;
     for (const r of cargados.values()) r.reporte.refresh().catch(e => console.warn("Actualización:", e));
@@ -950,6 +1043,14 @@ $("archivoImportar").onchange = async (e) => {
   }
 };
 $("btnCerrarPanel").onclick = cerrarPanel;
+async function recargarTodo() {
+  avisar("Recargando los reportes…");
+  await renovarToken("recarga manual");
+  await Promise.all([...cargados.values()].map(recargarReporte));
+  if (diapositivas.length) irA(actual, { reiniciarTiempo: false });
+  avisar("Reportes recargados.", 3000);
+}
+$("btnRecargarReportes").onclick = recargarTodo;
 $("btnConfigurar").onclick = abrirPanel;
 $("btnConfigurarVacio").onclick = abrirPanel;
 
@@ -1000,6 +1101,7 @@ document.addEventListener("keydown", (e) => {
   if (k === "n") $("btnNotas").click();
   if (k === "f") $("btnPantalla").click();
   if (k === "c" && !document.fullscreenElement) abrirPanel();
+  if (k === "r") recargarTodo();
 });
 
 /* =====================================================================
@@ -1023,11 +1125,7 @@ async function iniciarPresentacion() {
   marcarCambios();
 
   requestAnimationFrame(tick);
-  // El token dura ~1 hora; se renueva cada 50 minutos en todos los reportes
-  setInterval(async () => {
-    const nuevo = await obtenerToken();
-    if (nuevo) for (const r of cargados.values()) r.reporte.setAccessToken(nuevo);
-  }, 50 * 60 * 1000);
+  arrancado = true;
 
   if (fallas.size && !cargados.size) {
     errorEnPantalla([...fallas.values()][0]);
