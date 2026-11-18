@@ -127,7 +127,7 @@
   .interruptor { display: flex; align-items: center; gap: 8px; font-size: 0.875rem; cursor: pointer; }
   .interruptor input { width: 16px; height: 16px; }
   #panel input[type=checkbox] { accent-color: var(--acento); }
-  #panel input[type=text], #panel input[type=url], #panel input[type=number], #panel select, #panel textarea {
+  #panel input[type=text], #panel input[type=url], #panel input[type=number], #panel input[type=time], #panel select, #panel textarea {
     font: inherit; font-weight: 400; font-size: 0.875rem; color: var(--texto); width: 100%;
     border: 1px solid var(--linea); border-radius: 4px; padding: 7px 9px; background: #FFFFFF;
   }
@@ -241,8 +241,11 @@
         <label class="campo">Recargar reportes cada (min)
           <input type="number" id="cfgRecargar" min="0" step="1">
         </label>
+        <label class="campo ancho">Reiniciar los reportes todos los días a las
+          <input type="time" id="cfgReinicio">
+        </label>
       </div>
-      <p class="ayuda">0 = desactivado. "Actualizar datos" consulta de nuevo el modelo; "Recargar" vuelve a abrir el reporte completo, útil si publican una versión nueva.</p>
+      <p class="ayuda">0 = desactivado. "Actualizar datos" consulta de nuevo el modelo; "Recargar" vuelve a abrir el reporte completo, útil si publican una versión nueva. El reinicio diario vuelve a montar los reportes desde cero para liberar la memoria que Power BI acumula (déjalo vacío para desactivarlo).</p>
       <div style="display:grid; gap:8px; margin-top:12px">
         <label class="interruptor"><input type="checkbox" id="cfgAutoplay"> Iniciar reproduciendo</label>
         <label class="interruptor"><input type="checkbox" id="cfgCiclo"> Repetir en ciclo al terminar</label>
@@ -292,6 +295,7 @@ const CONFIG = {
     actualizarDatosMin: 0,
     recargarMin: 0,
     lineaEnPantallaCompleta: true,
+    reinicioHora: "04:00",   // hora a la que se vuelven a montar los reportes para liberar memoria ("" = nunca)
   },
 
   diapositivas: [
@@ -405,7 +409,7 @@ const AJUSTES = {
 };
 const PRESENTACION_BASE = {
   titulo: "Presentación de datos", autoplay: true, duracion: 30, ciclo: true, pausarAlInteractuar: true,
-  ajuste: "pagina", actualizarDatosMin: 0, recargarMin: 0, lineaEnPantallaCompleta: true,
+  ajuste: "pagina", actualizarDatosMin: 0, recargarMin: 0, lineaEnPantallaCompleta: true, reinicioHora: "04:00",
 };
 
 const nuevoId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -475,7 +479,7 @@ async function obtenerReporte(url) {
   return reportes.get(u.reportId);
 }
 
-async function crearReporte({ workspace, reportId }) {
+async function crearReporte({ workspace, reportId, urlBase }) {
   const token = await obtenerToken();
   if (!token) throw new Error("No hay sesión activa.");
   const api = workspace === "me"
@@ -506,7 +510,7 @@ async function crearReporte({ workspace, reportId }) {
     },
   });
 
-  const entrada = { reportId, nombre: info.name, contenedor, reporte, paginas: [], marcadores: [], ajusteActual: ajusteInicial, listo: false };
+  const entrada = { reportId, url: urlBase, nombre: info.name, contenedor, reporte, paginas: [], marcadores: [], ajusteActual: ajusteInicial, listo: false };
 
   await new Promise((listo, falla) => {
     reporte.on("loaded", async () => {
@@ -568,6 +572,75 @@ function recargarReporte(r) {
   });
   return r.recargando;
 }
+
+// Desmonta por completo un reporte y lo vuelve a insertar con un iframe nuevo.
+// Es la única salida cuando la pestaña interna de Power BI se bloquea o la mata el navegador.
+function reconstruirReporte(r) {
+  if (r.reconstruyendo) return r.reconstruyendo;
+  r.reconstruyendo = (async () => {
+    const activo = r.contenedor.classList.contains("activo");
+    try { powerbi.reset(r.contenedor); } catch (e) { console.warn("reset:", e); }
+    r.contenedor.remove();
+    cargados.delete(r.reportId);
+    reportes.delete(r.reportId);
+    const nuevo = await obtenerReporte(r.url);
+    if (activo) nuevo.contenedor.classList.add("activo");
+    console.log(`Reporte "${nuevo.nombre}" reconstruido`);
+    return nuevo;
+  })().finally(() => { r.reconstruyendo = null; });
+  return r.reconstruyendo;
+}
+
+let fallosGraves = 0;
+async function reconstruirTodo(motivo) {
+  avisar(`Reiniciando los reportes (${motivo})…`);
+  await renovarToken(motivo);
+  const resultados = await Promise.allSettled([...cargados.values()].map(reconstruirReporte));
+  const fallidos = resultados.filter(x => x.status === "rejected");
+  if (fallidos.length) { console.error("Reconstrucción:", fallidos.map(x => x.reason)); fallosGraves++; }
+  else fallosGraves = 0;
+  if (fallosGraves >= 3) { location.reload(); return; }
+  aplicarEstado();
+  if (diapositivas.length) irA(actual, { reiniciarTiempo: false });
+}
+
+// Vigilante: cada 45 s comprueba que el reporte en pantalla siga respondiendo
+setInterval(async () => {
+  if (document.hidden || !diapositivas.length || renovacion) return;
+  const r = cargados.get(diapositivas[actual]?.reportId);
+  if (!r || r.recargando || r.reconstruyendo) return;
+  try {
+    await conTiempo(r.reporte.getPages(), 15000);
+    r.fallosVigilante = 0;
+  } catch (e) {
+    r.fallosVigilante = (r.fallosVigilante || 0) + 1;
+    console.warn(`Vigilante: "${r.nombre}" no responde (${r.fallosVigilante})`, e);
+    if (r.fallosVigilante < 2) return;
+    avisar(`"${r.nombre}" dejó de responder; se vuelve a montar…`);
+    try {
+      await reconstruirReporte(r);
+      fallosGraves = 0;
+      if (diapositivas[actual]?.reportId === r.reportId) irA(actual, { reiniciarTiempo: false });
+    } catch (err) {
+      console.error("No se pudo reconstruir:", err);
+      if (++fallosGraves >= 3) location.reload();
+    }
+  }
+}, 45000);
+
+// Reinicio diario programado: vuelve a montar todos los reportes a la hora configurada
+let ultimoReinicioDia = null;
+setInterval(() => {
+  const hora = estado.presentacion.reinicioHora;
+  if (!hora || !cargados.size) return;
+  const ahora = new Date();
+  const hhmm = `${String(ahora.getHours()).padStart(2, "0")}:${String(ahora.getMinutes()).padStart(2, "0")}`;
+  const dia = ahora.toDateString();
+  if (hhmm === hora && ultimoReinicioDia !== dia) {
+    ultimoReinicioDia = dia;
+    reconstruirTodo("reinicio diario");
+  }
+}, 30000);
 
 function paginasVisibles(r) {
   return r.paginas.filter(p => p.visibility === 0);
@@ -674,12 +747,13 @@ async function irA(i, { reiniciarTiempo = true } = {}) {
   await mostrar(i);
 }
 
-async function mostrar(i, reintento = false) {
+async function mostrar(i, intento = 0) {
   const d = diapositivas[i];
   const r = cargados.get(d.reportId);
   if (!r) return;
   try {
     if (r.recargando) await r.recargando;
+    if (r.reconstruyendo) await r.reconstruyendo;
     if (d.marcador) {
       await conTiempo(r.reporte.bookmarksManager.apply(d.marcador), 15000);
     } else if (d.pagina) {
@@ -692,17 +766,27 @@ async function mostrar(i, reintento = false) {
       r.ajusteActual = ajuste;
     }
   } catch (e) {
-    console.error(`No se pudo mostrar "${tituloDe(d)}":`, e);
+    console.error(`No se pudo mostrar "${tituloDe(d)}" (intento ${intento + 1}):`, e);
     if (actual !== i) return;
-    if (!reintento) {
-      // El reporte dejó de responder: se recarga y se intenta una vez más
-      avisar(`"${r.nombre}" no respondió; recargando el reporte…`);
-      if (Date.now() > tokenVence - 60 * 1000) await renovarToken("fallo al mostrar");
-      await recargarReporte(r);
-      if (actual === i) return mostrar(i, true);
-      return;
-    }
+    try {
+      if (intento === 0) {
+        avisar(`"${r.nombre}" no respondió; recargando el reporte…`);
+        if (Date.now() > tokenVence - 60 * 1000) await renovarToken("fallo al mostrar");
+        await recargarReporte(r);
+      } else if (intento === 1) {
+        avisar(`"${r.nombre}" sigue sin responder; se vuelve a montar…`);
+        await reconstruirReporte(r);
+      } else {
+        if (++fallosGraves >= 3) { location.reload(); return; }
+        avisar(`No se pudo mostrar "${tituloDe(d)}"; se pasa a la siguiente.`);
+        setTimeout(() => { if (actual === i) irA(i + 1); }, 3000);
+        return;
+      }
+    } catch (err) { console.error(err); }
+    if (actual === i) return mostrar(i, intento + 1);
+    return;
   }
+  fallosGraves = 0;
 
   if (actual !== i) return;   // se cambió de diapositiva mientras cargaba
   for (const x of cargados.values()) x.contenedor.classList.toggle("activo", x === r);
@@ -808,6 +892,7 @@ function pintarPanel() {
   $("cfgAjuste").value = p.ajuste;
   $("cfgActualizar").value = p.actualizarDatosMin;
   $("cfgRecargar").value = p.recargarMin;
+  $("cfgReinicio").value = p.reinicioHora || "";
   $("cfgAutoplay").checked = p.autoplay;
   $("cfgCiclo").checked = p.ciclo;
   $("cfgPausar").checked = p.pausarAlInteractuar;
@@ -986,6 +1071,7 @@ const general = [
   ["cfgAjuste", "ajuste", (el) => el.value],
   ["cfgActualizar", "actualizarDatosMin", (el) => Math.max(0, Number(el.value) || 0)],
   ["cfgRecargar", "recargarMin", (el) => Math.max(0, Number(el.value) || 0)],
+  ["cfgReinicio", "reinicioHora", (el) => el.value],
   ["cfgAutoplay", "autoplay", (el) => el.checked],
   ["cfgCiclo", "ciclo", (el) => el.checked],
   ["cfgPausar", "pausarAlInteractuar", (el) => el.checked],
@@ -1044,10 +1130,7 @@ $("archivoImportar").onchange = async (e) => {
 };
 $("btnCerrarPanel").onclick = cerrarPanel;
 async function recargarTodo() {
-  avisar("Recargando los reportes…");
-  await renovarToken("recarga manual");
-  await Promise.all([...cargados.values()].map(recargarReporte));
-  if (diapositivas.length) irA(actual, { reiniciarTiempo: false });
+  await reconstruirTodo("recarga manual");
   avisar("Reportes recargados.", 3000);
 }
 $("btnRecargarReportes").onclick = recargarTodo;
