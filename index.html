@@ -386,7 +386,7 @@ function renovarToken(motivo) {
     if (!nuevo) return;
     for (const r of cargados.values()) {
       try { await r.reporte.setAccessToken(nuevo); } catch (e) { console.warn("setAccessToken:", e); }
-      if (r.conError) recargarReporte(r);
+      if (r.conError && !r.recuperando) recargarReporte(r);
     }
     console.log(`Token renovado (${motivo}); vence ${new Date(tokenVence).toLocaleTimeString()}`);
   })().catch(e => console.error("Renovación de token:", e)).finally(() => { renovacion = null; });
@@ -480,7 +480,7 @@ async function obtenerReporte(url) {
 }
 
 async function crearReporte({ workspace, reportId, urlBase }) {
-  const token = await obtenerToken();
+  const token = await obtenerToken({ forzar: !tokenVence || Date.now() > tokenVence - 10 * 60 * 1000 });
   if (!token) throw new Error("No hay sesión activa.");
   const api = workspace === "me"
     ? "https://api.powerbi.com/v1.0/myorg"
@@ -539,12 +539,17 @@ async function crearReporte({ workspace, reportId, urlBase }) {
       const d = e.detail || {};
       console.error(`Power BI (${info.name}):`, d);
       if (!entrada.listo) { falla(new Error(`Power BI no pudo cargar "${info.name}": ${d.message || "error desconocido"}`)); return; }
-      entrada.conError = true;
-      const texto = `${d.message || ""} ${d.detailedMessage || ""}`;
-      if (/TokenExpired|token|401|Unauthorized/i.test(texto)) renovarToken("Power BI avisó que venció");
-      else avisar(`Power BI reportó un problema en "${info.name}": ${d.message || "sin detalle"}`);
+      entrada.conError = Date.now();
+      const texto = `${d.message || ""} ${d.detailedMessage || ""} ${d.errorCode || ""}`;
+      if (/LoadReportFailed|Get report failed|TokenExpired|token|401|403|Unauthorized|NotFound/i.test(texto)) {
+        recuperarReporte(entrada, d.detailedMessage || d.message || "error de carga");
+      } else {
+        avisar(`Power BI reportó un problema en "${info.name}": ${d.message || "sin detalle"}`);
+      }
     });
   });
+  // Cuando el reporte vuelve a dibujarse bien, se reinician los contadores de reintentos
+  reporte.on("rendered", () => { entrada.conError = false; entrada.intentos = 0; fallosGraves = 0; });
 
   const pausarPorClic = () => { if (estado.presentacion.pausarAlInteractuar && reproduciendo) alternarReproduccion(false); };
   ["visualClicked", "dataSelected", "buttonClicked"].forEach(ev => reporte.on(ev, pausarPorClic));
@@ -585,13 +590,36 @@ function reconstruirReporte(r) {
     reportes.delete(r.reportId);
     const nuevo = await obtenerReporte(r.url);
     if (activo) nuevo.contenedor.classList.add("activo");
-    console.log(`Reporte "${nuevo.nombre}" reconstruido`);
+    console.log(`Reporte "${nuevo.nombre}" reconstruido (${new Date().toLocaleTimeString()})`);
     return nuevo;
   })().finally(() => { r.reconstruyendo = null; });
   return r.reconstruyendo;
 }
 
 let fallosGraves = 0;
+
+// Recupera un reporte que Power BI no pudo cargar: espera, renueva el token y lo vuelve a montar.
+// La espera crece en cada intento para no martillar el servicio si la falla es de Power BI.
+async function recuperarReporte(r, motivo) {
+  if (r.recuperando) return;
+  r.recuperando = true;
+  try {
+    r.intentos = (r.intentos || 0) + 1;
+    const espera = Math.min(10 * 60 * 1000, 15000 * Math.pow(2, r.intentos - 1));
+    avisar(`"${r.nombre}": ${motivo}. Se vuelve a intentar en ${Math.round(espera / 1000)} s (intento ${r.intentos})…`, espera);
+    await new Promise(ok => setTimeout(ok, espera));
+    await renovarToken(`recuperar "${r.nombre}"`);
+    const nuevo = await reconstruirReporte(r);
+    nuevo.intentos = r.intentos;
+    if (diapositivas[actual]?.reportId === r.reportId) irA(actual, { reiniciarTiempo: false });
+  } catch (e) {
+    console.error("Recuperación:", e);
+    if (++fallosGraves >= 5) location.reload();
+  } finally {
+    r.recuperando = false;
+  }
+}
+
 async function reconstruirTodo(motivo) {
   avisar(`Reiniciando los reportes (${motivo})…`);
   await renovarToken(motivo);
@@ -608,7 +636,8 @@ async function reconstruirTodo(motivo) {
 setInterval(async () => {
   if (document.hidden || !diapositivas.length || renovacion) return;
   const r = cargados.get(diapositivas[actual]?.reportId);
-  if (!r || r.recargando || r.reconstruyendo) return;
+  if (!r || r.recargando || r.reconstruyendo || r.recuperando) return;
+  if (r.conError && Date.now() - r.conError > 60 * 1000) { recuperarReporte(r, "error persistente"); return; }
   try {
     await conTiempo(r.reporte.getPages(), 15000);
     r.fallosVigilante = 0;
